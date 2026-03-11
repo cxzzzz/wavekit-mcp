@@ -75,6 +75,7 @@ def run(session_id: str, code: str) -> dict[str, Any]:
 
     PRE-INJECTED: VcdReader(path), FsdbReader(path), open_reader(path), np, Pattern, MatchStatus
     Do NOT use `import wavekit` — all objects are already available.
+    UNFAMILIAR WITH THE API? Call get_api_docs(session_id) before writing code.
 
     OPEN FILES:
         r  = VcdReader("/path/to/sim.vcd")      # open VCD file
@@ -230,20 +231,27 @@ data.value   # np.ndarray of signal values (uint64 or int64)
 data.clock   # np.ndarray of absolute clock cycle numbers
 data.time    # np.ndarray of simulation timestamps
 
-# Batch load with brace expansion — returns dict[tuple, Waveform]
-waves = r.load_matched_waveforms(
-    "tb.dut.fifo_{0..3}.w_ptr[2:0]",
-    clock_pattern="tb.clk",
-)
+# Batch load — returns dict[tuple, Waveform]; key is tuple of captured values
+waves = r.load_matched_waveforms("tb.dut.fifo_{0..3}.w_ptr[2:0]", clock_pattern="tb.clk")
 for (idx,), wave in waves.items():
     print(f"fifo_{idx}: mean={np.mean(wave.value):.2f}")
 
 # Computed expression — arithmetic on signal paths
-occupancy = r.eval(
-    "tb.dut.w_ptr[3:0] - tb.dut.r_ptr[3:0]",
-    clock="tb.clk",
-)
+occupancy = r.eval("tb.dut.w_ptr[3:0] - tb.dut.r_ptr[3:0]", clock="tb.clk")
 ```
+
+### Signal path pattern syntax
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `tb.dut.sig[7:0]` | Literal dotted path + bit range | `"tb.dut.data[7:0]"` |
+| `{a,b,c}` | String alternatives → one key element each | `"tb.dut.J_{state,next}[3:0]"` |
+| `{start..end}` | Integer range | `"tb.lane_{0..3}.valid"` |
+| `{start..end..step}` | Integer range with step | `"tb.lane_{0..6..2}.valid"` |
+| Multiple `{}` | Cartesian product of all expansions | `"tb.u{0,1}.fifo_{a,b}.cnt"` |
+| `@<regex>` | Python `re.fullmatch()`; `(...)` groups captured | `r"tb.dut.@(req\|ack\|valid)"` |
+| `$$ModName` | Any-depth scope by module def name (FSDB only) | `"$$axi_slave.rdata[31:0]"` |
+| `$ModName` | Direct-child scope by module def name (FSDB only) | `"tb.dut.$pipe_stage"` |
 
 ---
 
