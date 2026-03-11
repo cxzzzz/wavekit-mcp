@@ -16,7 +16,12 @@ from typing import Any
 
 import numpy as np
 from RestrictedPython import compile_restricted
-from RestrictedPython.Guards import safe_builtins, safer_getattr
+from RestrictedPython.Guards import (
+    guarded_iter_unpack_sequence,
+    guarded_unpack_sequence,
+    safe_builtins,
+    safer_getattr,
+)
 
 from .config import Config
 from .serializer import serialize_result
@@ -161,6 +166,9 @@ _BASE_GUARDS: dict[str, Any] = {
     "_inplacevar_": _guarded_inplacevar,
     # RestrictedPython 8.x transforms `print(...)` → `_print_(_getattr_)._call_print(...)`
     "_print_": _StdoutPrinter,
+    # sequence unpacking: `a, b = func()` and `for a, b in items:`
+    "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+    "_unpack_sequence_": guarded_unpack_sequence,
 }
 
 
@@ -189,6 +197,8 @@ class Session:
             "Pattern": wavekit.Pattern,
             "MatchStatus": wavekit.MatchStatus,
             "open_reader": self._make_open_reader(),
+            "VcdReader": self._make_reader_class(wavekit.VcdReader),
+            "FsdbReader": self._make_reader_class(wavekit.FsdbReader),
         }
 
         if self.config.file_access.read_enabled or self.config.file_access.write_enabled:
@@ -233,6 +243,21 @@ class Session:
             return r
 
         return open_reader
+
+    def _make_reader_class(self, cls):
+        """Return a wrapper that instantiates cls, enters its context, and registers it for auto-close."""
+        managed_readers = self.managed_readers
+
+        class _ManagedReader:
+            def __new__(new_cls, path: str, *args, **kwargs):
+                r = cls(path, *args, **kwargs)
+                r.__enter__()
+                managed_readers.append(r)
+                return r
+
+        _ManagedReader.__name__ = cls.__name__
+        _ManagedReader.__qualname__ = cls.__qualname__
+        return _ManagedReader
 
     def _make_safe_open(self):
         cfg = self.config.file_access

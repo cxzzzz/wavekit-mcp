@@ -31,6 +31,8 @@ def open_session() -> str:
 
     Pre-injected objects available in every session:
       open_reader(path)  — open a .vcd or .fsdb file; auto-closed on reset/close
+      VcdReader(path)    — open a VCD file directly; auto-closed on reset/close
+      FsdbReader(path)   — open an FSDB file directly; auto-closed on reset/close
       np                 — numpy
       Pattern            — wavekit.Pattern  (temporal pattern matching DSL)
       MatchStatus        — wavekit.MatchStatus
@@ -39,10 +41,12 @@ def open_session() -> str:
 
     Typical workflow:
       1. sid = open_session()
-      2. run(sid, "r = open_reader('/data/sim.vcd')")
+      2. run(sid, "r = VcdReader('/data/sim.vcd')")
       3. run(sid, "data = r.load_waveform('tb.data[7:0]', clock='tb.clk')")
       4. run(sid, "print(np.mean(data.value))")
       5. close_session(sid)
+
+    IMPORTANT: Do NOT use `import wavekit` — all wavekit objects are pre-injected.
     """
     return _get().open_session()
 
@@ -69,16 +73,19 @@ def reset_session(session_id: str) -> str:
 def run(session_id: str, code: str) -> dict[str, Any]:
     """Execute Python code in a persistent session. State persists across calls.
 
-    PRE-INJECTED: open_reader(path), np, Pattern, MatchStatus
+    PRE-INJECTED: VcdReader(path), FsdbReader(path), open_reader(path), np, Pattern, MatchStatus
+    Do NOT use `import wavekit` — all objects are already available.
 
     OPEN FILES:
-        r  = open_reader("/path/to/sim.vcd")    # .vcd → VcdReader
-        r2 = open_reader("/path/to/ref.fsdb")   # other → FsdbReader
+        r  = VcdReader("/path/to/sim.vcd")      # open VCD file
+        r2 = FsdbReader("/path/to/ref.fsdb")    # open FSDB file
+        # or use open_reader() for auto-detection by extension
+        r3 = open_reader("/path/to/sim.vcd")    # .vcd → VcdReader, other → FsdbReader
         # multiple readers allowed; all auto-closed on reset/close
 
     MULTI-CALL WORKFLOW:
         # call 1 — load
-        r = open_reader("sim.vcd")
+        r = VcdReader("sim.vcd")
         data = r.load_waveform("tb.dut.data[7:0]", clock="tb.clk")
         # call 2 — data is still in namespace
         print(f"mean={np.mean(data.value):.2f}  n={len(data.value)}")
@@ -195,15 +202,20 @@ Use reset_session(sid) to clear variables without reopening files.
 ## Opening Files
 
 ```python
-# Single file
-r = open_reader("/path/to/sim.vcd")    # .vcd → VcdReader
+# Single file — use VcdReader or FsdbReader directly (both are pre-injected)
+r = VcdReader("/path/to/sim.vcd")
+r = FsdbReader("/path/to/sim.fsdb")
+
+# Or use open_reader() for auto-detection by file extension
+r = open_reader("/path/to/sim.vcd")    # .vcd → VcdReader, other → FsdbReader
 
 # Multiple files (e.g. golden vs actual comparison)
-r_gold = open_reader("/data/golden.vcd")
-r_act  = open_reader("/data/actual.vcd")
+r_gold = VcdReader("/data/golden.vcd")
+r_act  = VcdReader("/data/actual.vcd")
 ```
 
 All readers are auto-closed on reset_session() / close_session().
+Do NOT use `import wavekit` or `with VcdReader(...)` — just assign directly.
 
 ---
 
@@ -273,8 +285,8 @@ window = data.cycle_slice(begin=100, end=500)
 
 ### Compare two simulations
 ```python
-r1 = open_reader("/data/golden.vcd")
-r2 = open_reader("/data/actual.vcd")
+r1 = VcdReader("/data/golden.vcd")
+r2 = VcdReader("/data/actual.vcd")
 gold = r1.load_waveform("tb.data[7:0]", clock="tb.clk")
 act  = r2.load_waveform("tb.data[7:0]", clock="tb.clk")
 
@@ -407,7 +419,7 @@ This is the fastest way to locate signals when you only know the RTL module name
 ### Get all instances of a module
 
 ```python
-r = open_reader("/data/sim.fsdb")
+r = FsdbReader("/data/sim.fsdb")
 
 # Find every instance of module "axi_slave" anywhere in the hierarchy
 scopes = r.get_matched_scope("$$axi_slave")
