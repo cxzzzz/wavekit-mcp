@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "wavekit-mcp"
+version = "0.1.0"
+description = "MCP server for AI-driven waveform analysis via wavekit"
+authors = []
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastmcp = ">=2.0"
+wavekit = "*"
+numpy = "*"
+RestrictedPython = ">=7.0"
+
+[tool.poetry.scripts]
+wavekit-mcp = "wavekit_mcp.server:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

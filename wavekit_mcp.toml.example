@@ -1,0 +1,26 @@
+# wavekit-mcp configuration
+# All fields are optional; values shown are the defaults.
+
+[limits]
+max_sessions         = 5      # max concurrent sessions
+run_timeout_sec      = 120    # seconds before a run() call is killed
+output_max_chars     = 500    # stdout/stderr truncation limit per run()
+result_str_max       = 500    # string result truncation limit
+result_list_max      = 50     # list/dict truncation limit
+result_preview_items = 30     # array / Waveform preview length
+history_max          = 500    # max history entries kept per session
+
+[file_access]
+read_enabled         = false
+write_enabled        = false
+# Glob patterns for allowed paths. '**' matches any number of directories.
+read_allowed_paths   = ["/tmp/**"]
+write_allowed_paths  = ["/tmp/**"]
+
+# Examples of more permissive configs:
+# read_allowed_paths  = ["/home/user/sim/**", "/data/waves/**", "/tmp/**"]
+# write_allowed_paths = ["/home/user/results/**", "/tmp/**"]
+
+[log]
+file  = ""           # path to log file; empty = stderr only
+level = "INFO"       # DEBUG / INFO / WARNING / ERROR
