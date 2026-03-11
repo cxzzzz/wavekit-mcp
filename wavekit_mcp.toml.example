@@ -1,6 +1,11 @@
 # wavekit-mcp configuration
 # All fields are optional; values shown are the defaults.
 
+[server]
+transport = "stdio"          # stdio | streamable-http
+host      = "0.0.0.0"       # only used when transport = streamable-http
+port      = 8080             # only used when transport = streamable-http
+
 [limits]
 max_sessions         = 5      # max concurrent sessions
 run_timeout_sec      = 120    # seconds before a run() call is killed

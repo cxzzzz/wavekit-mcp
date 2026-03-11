@@ -31,10 +31,18 @@ class LogConfig:
 
 
 @dataclass
+class ServerConfig:
+    transport: str = "stdio"        # stdio | streamable-http
+    host: str = "0.0.0.0"
+    port: int = 8080
+
+
+@dataclass
 class Config:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     file_access: FileAccessConfig = field(default_factory=FileAccessConfig)
     log: LogConfig = field(default_factory=LogConfig)
+    server: ServerConfig = field(default_factory=ServerConfig)
 
     @classmethod
     def load(cls, config_path: str | None = None) -> Config:
@@ -46,6 +54,7 @@ class Config:
         limits = _build_dataclass(LimitsConfig, data.get("limits", {}))
         file_access = _build_dataclass(FileAccessConfig, data.get("file_access", {}))
         log = _build_dataclass(LogConfig, data.get("log", {}))
+        server = _build_dataclass(ServerConfig, data.get("server", {}))
 
         # Environment variable overrides: WAVEKIT_MCP_<FIELD_NAME_UPPER>
         # Only scalar fields (int, bool) are supported via env vars.
@@ -59,7 +68,12 @@ class Config:
             if env_val is not None:
                 setattr(file_access, fname, _coerce(ftype, env_val))
 
-        return cls(limits=limits, file_access=file_access, log=log)
+        for fname, ftype in _scalar_fields(ServerConfig):
+            env_val = os.environ.get(f"WAVEKIT_MCP_{fname.upper()}")
+            if env_val is not None:
+                setattr(server, fname, _coerce(ftype, env_val))
+
+        return cls(limits=limits, file_access=file_access, log=log, server=server)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

@@ -494,12 +494,26 @@ def main() -> None:
     _setup_logging(config)
 
     log = logging.getLogger("wavekit_mcp")
-    log.info("server_start config=%s", args.config or "<defaults>")
+    srv = config.server
+    log.info(
+        "server_start config=%s transport=%s",
+        args.config or "<defaults>",
+        srv.transport,
+    )
 
     global _manager
     _manager = SessionManager(config)
 
-    mcp.run()
+    if srv.transport == "stdio":
+        mcp.run(transport="stdio")
+    elif srv.transport == "streamable-http":
+        log.info("listening on %s:%d", srv.host, srv.port)
+        mcp.run(transport="streamable-http", host=srv.host, port=srv.port)
+    else:
+        raise ValueError(
+            f"Unknown transport '{srv.transport}'. "
+            "Supported: stdio, streamable-http"
+        )
 
 
 if __name__ == "__main__":
