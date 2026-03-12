@@ -7,7 +7,7 @@ authors = []
 [tool.poetry.dependencies]
 python = "^3.11"
 fastmcp = ">=2.0"
-wavekit = "*"
+wavekit = ">=0.5.2"
 numpy = "*"
 RestrictedPython = ">=7.0"
 
