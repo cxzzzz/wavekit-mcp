@@ -229,7 +229,7 @@ class Session:
             when the session is reset or closed.
 
             Returns a Reader with: load_waveform(), load_matched_waveforms(),
-            get_matched_signals(), get_matched_scope(), eval(), top_scope_list()
+            get_matched_signals(), get_matched_scopes(), eval(), top_scope_list()
             """
             import wavekit
 

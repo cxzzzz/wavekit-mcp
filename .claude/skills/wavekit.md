@@ -35,7 +35,7 @@ Readers are auto-closed on reset_session() / close_session().
 | `r.load_matched_waveforms(pattern, clock_pattern)` | Batch load with pattern → dict[tuple, Waveform] |
 | `r.eval(expr, clock)` | Arithmetic on signal paths → Waveform |
 | `r.get_matched_signals(pattern)` | List matching signal paths → dict[tuple, Signal] |
-| `r.get_matched_scope(pattern)` | List matching scopes → dict[tuple, Scope] |
+| `r.get_matched_scopes(pattern)` | List matching scopes → dict[tuple, Scope] |
 | `r.top_scope_list()` | Traverse top-level hierarchy |
 
 ### Signal path pattern syntax
@@ -84,8 +84,8 @@ Use when you know the RTL module type but not the instance path.
 # $ModName  — direct-child scope whose module definition name is ModName
 # $$ModName — any-depth descendant scope with that module name
 
-scopes = r.get_matched_scope("$$axi_slave")          # all instances anywhere
-scopes = r.get_matched_scope("tb.dut.$pipe_stage")   # direct children only
+scopes = r.get_matched_scopes("$$axi_slave")          # all instances anywhere
+scopes = r.get_matched_scopes("tb.dut.$pipe_stage")   # direct children only
 
 waves = r.load_matched_waveforms("$$fifo_unit.data_out[7:0]", clock_pattern="tb.clk")
 waves = r.load_matched_waveforms("$$fifo_{a,b}.w_ptr[3:0]", clock_pattern="tb.clk")

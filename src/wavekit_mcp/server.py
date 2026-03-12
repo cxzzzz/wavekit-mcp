@@ -430,7 +430,7 @@ This is the fastest way to locate signals when you only know the RTL module name
 r = FsdbReader("/data/sim.fsdb")
 
 # Find every instance of module "axi_slave" anywhere in the hierarchy
-scopes = r.get_matched_scope("$$axi_slave")
+scopes = r.get_matched_scopes("$$axi_slave")
 for key, scope in scopes.items():
     print(scope.full_name())   # prints the full instance path
 ```
@@ -451,7 +451,7 @@ for key, wave in waves.items():
 
 ```python
 # Only instances of "pipe_stage" that are direct children of "tb.dut"
-scopes = r.get_matched_scope("tb.dut.$pipe_stage")
+scopes = r.get_matched_scopes("tb.dut.$pipe_stage")
 ```
 
 ### Combine with brace/regex patterns
