@@ -4,7 +4,9 @@ import ast
 import contextlib
 import io
 import logging
+import multiprocessing
 import operator
+import tempfile
 import threading
 import time
 import traceback
@@ -25,6 +27,7 @@ from RestrictedPython.Guards import (
 
 from .config import Config
 from .serializer import serialize_result
+from .worker import worker_main
 
 
 # ── RestrictedPython print bridge ─────────────────────────────────────────────
@@ -367,7 +370,7 @@ class Session:
 class SessionManager:
     def __init__(self, config: Config):
         self.config = config
-        self._sessions: dict[str, Session] = {}
+        self._sessions: dict[str, SessionProxy] = {}
         self._lock = threading.Lock()
         self._log = logging.getLogger("wavekit_mcp")
 
@@ -380,29 +383,37 @@ class SessionManager:
                     "Call close_session() to free one first."
                 )
             sid = uuid.uuid4().hex[:8]
-            self._sessions[sid] = Session(sid, self.config)
+            self._sessions[sid] = SessionProxy(sid, self.config)
             self._log.info("session_open sid=%s total=%d", sid, len(self._sessions))
             return sid
 
     def close_session(self, session_id: str) -> None:
         with self._lock:
-            self._get(session_id).close()
-            del self._sessions[session_id]
+            session = self._sessions.get(session_id)
+            if session:
+                session.close()
+                del self._sessions[session_id]
             self._log.info("session_close sid=%s total=%d", session_id, len(self._sessions))
 
     def reset_session(self, session_id: str) -> None:
-        self._get(session_id)._reset_namespace()
+        self._get(session_id).reset()
         self._log.info("session_reset sid=%s", session_id)
 
     def run(self, session_id: str, code: str) -> RunResult:
-        result = self._get(session_id).execute(code)
+        session = self._get(session_id)
+        result = session.execute(code)
+
+        # If session crashed, clean it up
+        if "crashed" in (result.error or "") or "terminated" in (result.error or ""):
+            with self._lock:
+                self._sessions.pop(session_id, None)
 
         # INFO: lightweight event record (no payload)
         self._log.info(
             "run sid=%s duration_ms=%d status=%s",
             session_id,
             result.duration_ms,
-            "error" if result.error else "ok",
+            "crash" if "crashed" in (result.error or "") else ("error" if result.error else "ok"),
         )
 
         # DEBUG: full code + full result/error (what AI sent and what AI received)
@@ -425,7 +436,7 @@ class SessionManager:
             for e in entries
         ]
 
-    def _get(self, session_id: str) -> Session:
+    def _get(self, session_id: str) -> SessionProxy:
         session = self._sessions.get(session_id)
         if session is None:
             raise KeyError(
@@ -482,3 +493,235 @@ def _truncate_output(output: str, max_chars: int) -> str:
         output[:max_chars]
         + f"\n...[truncated: {omitted} chars omitted. Use smaller print() calls.]"
     )
+
+
+# ── SessionProxy (process isolation) ──────────────────────────────────────────
+
+# Signal number → name mapping
+_SIGNAL_NAMES: dict[int, str] = {
+    1: "SIGHUP",
+    2: "SIGINT",
+    3: "SIGQUIT",
+    4: "SIGILL",
+    5: "SIGTRAP",
+    6: "SIGABRT",
+    7: "SIGBUS",
+    8: "SIGFPE",
+    9: "SIGKILL",
+    10: "SIGUSR1",
+    11: "SIGSEGV",
+    12: "SIGUSR2",
+    13: "SIGPIPE",
+    14: "SIGALRM",
+    15: "SIGTERM",
+}
+
+
+class SessionProxy:
+    """
+    Proxy to a session running in an isolated worker process.
+
+    Handles communication with the worker and crash detection. If the worker
+    crashes (e.g., segfault in a C library), this proxy detects it and returns
+    an appropriate error message instead of bringing down the main process.
+    """
+
+    def __init__(self, session_id: str, config: Config):
+        self.session_id = session_id
+        self.config = config
+        self._last_code: str | None = None
+        self.history: list[HistoryEntry] = []
+        self._log = logging.getLogger("wavekit_mcp")
+
+        # Create temporary file for worker stderr (crash diagnostics)
+        self._stderr_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False
+        )
+        self._stderr_path = self._stderr_file.name
+        self._stderr_file.close()
+
+        # Create pipe for bidirectional communication
+        self._parent_conn, child_conn = multiprocessing.Pipe()
+
+        # Spawn worker process
+        self._process = multiprocessing.Process(
+            target=worker_main,
+            args=(child_conn, config, self._stderr_path),
+            name=f"session-{session_id}",
+            daemon=True,
+        )
+        self._process.start()
+
+        self._closed = False
+        self._crashed = False
+
+    def execute(self, code: str) -> RunResult:
+        """Execute code in the worker process."""
+        if self._closed:
+            result = self._error_result(
+                "Session is closed. Call open_session() to create a new one."
+            )
+            self._add_history(code, result.error, 0)
+            return result
+
+        if self._crashed:
+            result = self._error_result(
+                "Session has crashed. Call open_session() to create a new one."
+            )
+            self._add_history(code, result.error, 0)
+            return result
+
+        # Save last code for crash diagnostics
+        self._last_code = code[:500] if len(code) > 500 else code
+
+        try:
+            self._parent_conn.send({"type": "exec", "code": code})
+            timeout = self.config.limits.run_timeout_sec
+
+            if self._parent_conn.poll(timeout=timeout):
+                msg = self._parent_conn.recv()
+
+                if msg["type"] == "result":
+                    result = msg["data"]  # RunResult object directly
+                    self._add_history(code, result.error, result.duration_ms)
+                    return result
+                elif msg["type"] == "error":
+                    result = self._error_result(f"Worker error: {msg['message']}")
+                    self._add_history(code, result.error, 0)
+                    return result
+                else:
+                    result = self._error_result(f"Unknown response type: {msg['type']}")
+                    self._add_history(code, result.error, 0)
+                    return result
+
+            else:
+                # Timeout - check if worker crashed or is just slow
+                if not self._process.is_alive():
+                    result = self._detect_crash()
+                    self._add_history(code, result.error, 0)
+                    return result
+
+                # Worker is still alive but not responding
+                self._mark_crashed()
+                result = self._error_result(
+                    f"Execution timed out after {timeout}s and worker became unresponsive. "
+                    f"The session has been terminated. Please open a new session."
+                )
+                self._add_history(code, result.error, timeout * 1000)
+                return result
+
+        except (BrokenPipeError, ConnectionError, EOFError):
+            result = self._detect_crash()
+            self._add_history(code, result.error, 0)
+            return result
+
+    def reset(self) -> None:
+        """Reset the session namespace."""
+        if self._closed or self._crashed:
+            return
+
+        try:
+            self._parent_conn.send({"type": "reset"})
+            if self._parent_conn.poll(timeout=10):
+                self._parent_conn.recv()  # Wait for ack
+        except (BrokenPipeError, ConnectionError, EOFError):
+            self._detect_crash()
+
+    def close(self) -> None:
+        """Close the session and terminate the worker."""
+        if self._closed:
+            return
+
+        self._closed = True
+
+        try:
+            self._parent_conn.send({"type": "close"})
+            self._process.join(timeout=5)
+        except (BrokenPipeError, ConnectionError, EOFError):
+            pass
+
+        finally:
+            if self._process.is_alive():
+                self._process.terminate()
+                self._process.join(timeout=2)
+                if self._process.is_alive():
+                    self._process.kill()
+
+            try:
+                self._parent_conn.close()
+            except Exception:
+                pass
+
+            # Clean up stderr log file
+            try:
+                Path(self._stderr_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _detect_crash(self) -> RunResult:
+        """Detect worker crash and return error result."""
+        self._mark_crashed()
+        return self._make_crash_result()
+
+    def _mark_crashed(self) -> None:
+        """Mark session as crashed."""
+        if self._crashed:
+            return
+        self._crashed = True
+        self._closed = True
+
+    def _read_stderr_log(self) -> str | None:
+        """Read stderr log from worker process (for crash diagnostics)."""
+        try:
+            path = Path(self._stderr_path)
+            if path.exists() and path.stat().st_size > 0:
+                return path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+        return None
+
+    def _make_crash_result(self) -> RunResult:
+        """Create RunResult for a crashed session."""
+        exit_code = self._process.exitcode
+        stderr_log = self._read_stderr_log()
+
+        if exit_code is not None and exit_code < 0:
+            # Negative exit code means killed by signal
+            sig = -exit_code
+            sig_name = _SIGNAL_NAMES.get(sig, f"SIGNAL{sig}")
+            error = (
+                f"Session worker crashed (signal: {sig_name}). "
+                f"This is likely caused by a bug in wavekit or a corrupted waveform file. "
+                f"Please open a new session with open_session()."
+            )
+        elif exit_code is not None:
+            error = (
+                f"Session worker crashed (exit code: {exit_code}). "
+                f"Please open a new session."
+            )
+        else:
+            error = "Session worker crashed. Please open a new session."
+
+        # Log crash details for debugging
+        self._log.error(
+            "session_crash sid=%s exit_code=%s signal=%s last_code=%s\n%s",
+            self.session_id,
+            exit_code,
+            _SIGNAL_NAMES.get(-exit_code) if exit_code and exit_code < 0 else None,
+            self._last_code[:100] if self._last_code else None,
+            stderr_log or "(no stderr output)",
+        )
+
+        return RunResult(result=None, output="", error=error, duration_ms=0)
+
+    def _error_result(self, error: str) -> RunResult:
+        """Create RunResult with an error message."""
+        return RunResult(result=None, output="", error=error, duration_ms=0)
+
+    def _add_history(self, code: str, error: str | None, duration_ms: int) -> None:
+        """Add execution to history."""
+        entry = HistoryEntry(code=code, error=error, duration_ms=duration_ms)
+        self.history.append(entry)
+        max_h = self.config.limits.history_max
+        if len(self.history) > max_h:
+            self.history = self.history[-max_h:]
