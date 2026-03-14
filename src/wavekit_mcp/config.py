@@ -35,6 +35,7 @@ class ServerConfig:
     transport: str = "stdio"        # stdio | streamable-http
     host: str = "0.0.0.0"
     port: int = 8080
+    plots_dir: str = ""             # empty = auto-create at startup
 
 
 @dataclass

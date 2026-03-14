@@ -11,6 +11,8 @@ fastmcp = ">=2.0"
 wavekit = ">=0.5.2"
 numpy = "*"
 RestrictedPython = ">=7.0"
+plotly = ">=5.0"
+kaleido = ">=0.2"
 
 [tool.poetry.scripts]
 wavekit-mcp = "wavekit_mcp.server:main"

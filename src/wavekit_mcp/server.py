@@ -3,9 +3,13 @@ from __future__ import annotations
 import argparse
 import logging
 import pydoc as _pydoc
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import FileResponse, JSONResponse
 
 from .config import Config
 from .session import SessionManager
@@ -13,9 +17,11 @@ from .session import SessionManager
 mcp = FastMCP("wavekit-mcp")
 
 _manager: SessionManager | None = None
+_plots_dir: Path | None = None
 
 
-def _get() -> SessionManager:
+def _get_manager() -> SessionManager:
+    """Get the global SessionManager instance."""
     if _manager is None:
         raise RuntimeError("Server not initialised.")
     return _manager
@@ -36,6 +42,8 @@ def open_session() -> str:
       np                 — numpy
       Pattern            — wavekit.Pattern  (temporal pattern matching DSL)
       MatchStatus        — wavekit.MatchStatus
+      go                 — plotly.graph_objects (for creating figures)
+      px                 — plotly.express (for quick plots)
       open(path, mode)   — standard file I/O (only if enabled in server config,
                            restricted to configured allowed paths)
 
@@ -48,13 +56,13 @@ def open_session() -> str:
 
     IMPORTANT: Do NOT use `import wavekit` — all wavekit objects are pre-injected.
     """
-    return _get().open_session()
+    return _get_manager().open_session()
 
 
 @mcp.tool()
 def close_session(session_id: str) -> str:
     """Close a session and release all resources (open readers, memory)."""
-    _get().close_session(session_id)
+    _get_manager().close_session(session_id)
     return f"Session '{session_id}' closed."
 
 
@@ -65,7 +73,7 @@ def reset_session(session_id: str) -> str:
     Pre-injected objects (open_reader, np, Pattern, MatchStatus) are restored.
     Use this to start a fresh analysis without creating a new session.
     """
-    _get().reset_session(session_id)
+    _get_manager().reset_session(session_id)
     return f"Session '{session_id}' reset."
 
 
@@ -73,7 +81,7 @@ def reset_session(session_id: str) -> str:
 def run(session_id: str, code: str) -> dict[str, Any]:
     """Execute Python code in a persistent session. State persists across calls.
 
-    PRE-INJECTED: VcdReader(path), FsdbReader(path), open_reader(path), np, Pattern, MatchStatus
+    PRE-INJECTED: VcdReader(path), FsdbReader(path), open_reader(path), np, Pattern, MatchStatus, go, px
     Do NOT use `import wavekit` — all objects are already available.
     UNFAMILIAR WITH THE API? Call get_api_docs(session_id) before writing code.
 
@@ -83,6 +91,13 @@ def run(session_id: str, code: str) -> dict[str, Any]:
         # or use open_reader() for auto-detection by extension
         r3 = open_reader("/path/to/sim.vcd")    # .vcd → VcdReader, other → FsdbReader
         # multiple readers allowed; all auto-closed on reset/close
+
+    VISUALIZATION (plotly):
+        import plotly.graph_objects as go  # → use go directly (pre-injected)
+        import plotly.express as px        # → use px directly (pre-injected)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=[1,2,3], y=[4,5,6]))
+        # Then call save_plot(session_id, "fig") to get a viewable URL
 
     MULTI-CALL WORKFLOW:
         # call 1 — load
@@ -109,7 +124,7 @@ def run(session_id: str, code: str) -> dict[str, Any]:
         error       — exception traceback, or null on success
         duration_ms — wall-clock execution time in milliseconds
     """
-    r = _get().run(session_id, code)
+    r = _get_manager().run(session_id, code)
     return {
         "result": r.result,
         "output": r.output,
@@ -129,7 +144,7 @@ def get_history(session_id: str, last_n: int = 10) -> list[dict]:
 
     Output and result values are not stored to keep history compact.
     """
-    return _get().get_history(session_id, last_n)
+    return _get_manager().get_history(session_id, last_n)
 
 
 @mcp.tool()
@@ -175,6 +190,72 @@ def get_api_docs(topic: str = "") -> str:
         )
 
     return _pydoc.render_doc(topic_map[topic], renderer=_pydoc.plaintext)
+
+
+@mcp.tool()
+def save_plot(
+    session_id: str,
+    figure_var: str,
+    base_url: str = "http://localhost:8080",
+) -> dict[str, str]:
+    """Save a plotly Figure to interactive HTML and static PNG.
+
+    Args:
+        session_id: Session ID from open_session()
+        figure_var: Name of the plotly Figure variable in the session
+        base_url: Base URL for generating clickable links (default: http://localhost:8080)
+
+    Returns:
+        {
+            "html_url": "http://localhost:8080/plots/plot_a1b2c3.html",
+            "png_url": "http://localhost:8080/plots/plot_a1b2c3.png"  # or null if PNG failed
+        }
+
+    html_url: Interactive plot for viewing in browser. Download if you need long-term access.
+    png_url: Static image for embedding in documents. Download if you need long-term access.
+
+    Example:
+        # First create a figure in the session
+        run(sid, "fig = go.Figure()")
+        run(sid, "fig.add_trace(go.Scatter(x=data.clock, y=data.value))")
+
+        # Then save it
+        result = save_plot(sid, "fig")
+        # Tell user to open result["html_url"] in browser
+    """
+    return _get_manager().save_plot(session_id, figure_var, base_url)
+
+
+# ── HTTP routes for plot serving ───────────────────────────────────────────────
+
+@mcp.custom_route("/plots/{filename:path}", methods=["GET"])
+async def serve_plot(request: Request) -> FileResponse:
+    """Serve plot files (HTML and PNG)."""
+    global _plots_dir
+    if _plots_dir is None:
+        return JSONResponse({"error": "Plots directory not initialized"}, status_code=500)
+
+    filename = request.path_params.get("filename", "")
+    if not filename:
+        return JSONResponse({"error": "Filename required"}, status_code=400)
+
+    # Security: prevent path traversal
+    if ".." in filename or "/" in filename:
+        return JSONResponse({"error": "Invalid filename"}, status_code=400)
+
+    filepath = _plots_dir / filename
+    if not filepath.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+
+    # Determine content type
+    if filename.endswith(".html"):
+        media_type = "text/html"
+    elif filename.endswith(".png"):
+        media_type = "image/png"
+    else:
+        return JSONResponse({"error": "Unsupported file type"}, status_code=400)
+
+    return FileResponse(filepath, media_type=media_type)
 
 
 # ── resources ─────────────────────────────────────────────────────────────────
@@ -397,6 +478,99 @@ print(data.value.tolist())          # ✗ truncated
 
 ---
 
+## Visualization
+
+Use `go` (plotly.graph_objects) and `px` (plotly.express) for visualization.
+Both are pre-injected — no import needed.
+
+### Basic signal plot
+```python
+# Load waveform data
+data = r.load_waveform("tb.dut.signal[7:0]", clock="tb.clk")
+
+# Create figure
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=data.clock,
+    y=data.value,
+    mode='lines+markers',
+    name='signal'
+))
+fig.update_layout(
+    title="Signal Waveform",
+    xaxis_title="Clock Cycle",
+    yaxis_title="Value"
+)
+
+# Save and get URL for user
+# Call save_plot(session_id, "fig", base_url="http://localhost:8080")
+```
+
+### Multiple signals comparison
+```python
+signal_a = r.load_waveform("tb.dut.a[7:0]", clock="tb.clk")
+signal_b = r.load_waveform("tb.dut.b[7:0]", clock="tb.clk")
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=signal_a.clock, y=signal_a.value, name='a'))
+fig.add_trace(go.Scatter(x=signal_b.clock, y=signal_b.value, name='b'))
+fig.update_layout(title="Signal Comparison")
+```
+
+### Histogram / distribution
+```python
+fig = px.histogram(x=data.value, nbins=20, title="Value Distribution")
+```
+
+### Pattern match results
+```python
+result = Pattern().wait(req).wait(ack).timeout(64).match()
+valid = result.filter_valid()
+
+fig = go.Figure()
+fig.add_trace(go.Bar(
+    x=list(range(len(valid.duration.value))),
+    y=valid.duration.value
+))
+fig.update_layout(
+    title="Transaction Latency",
+    xaxis_title="Transaction #",
+    yaxis_title="Cycles"
+)
+```
+
+### Quick plots with px
+```python
+# Scatter plot
+fig = px.scatter(x=data.clock, y=data.value, title="Signal Over Time")
+
+# Line plot
+fig = px.line(x=data.clock, y=data.value, title="Signal Trace")
+
+# Bar chart
+fig = px.bar(x=['a', 'b', 'c'], y=[10, 20, 15], title="Comparison")
+```
+
+### save_plot usage
+```python
+# After creating fig = go.Figure(...) or fig = px.line(...)
+result = save_plot(sid, "fig", base_url="http://localhost:8080")
+
+# Returns:
+# {
+#   "html_url": "http://localhost:8080/plots/plot_xxx.html",
+#   "png_url": "http://localhost:8080/plots/plot_xxx.png"
+# }
+
+# Tell user to open html_url in browser for interactive viewing.
+# Download png_url if they need to embed in documents.
+```
+
+> **Note:** URLs are temporary — valid only while the MCP server is running.
+> Download files if long-term access is needed.
+
+---
+
 ## Reading Log Files (if file access is enabled)
 
 ```python
@@ -520,6 +694,16 @@ def main() -> None:
         args.config or "<defaults>",
         srv.transport,
     )
+
+    # Create unique plots directory
+    global _plots_dir
+    if srv.plots_dir:
+        _plots_dir = Path(srv.plots_dir)
+        _plots_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        _plots_dir = Path(tempfile.mkdtemp(prefix="wavekit_plots_"))
+    srv.plots_dir = str(_plots_dir)  # Pass to workers via config
+    log.info("plots_dir=%s", _plots_dir)
 
     global _manager
     _manager = SessionManager(config)

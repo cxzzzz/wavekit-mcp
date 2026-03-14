@@ -193,12 +193,16 @@ class Session:
         self._close_readers()
 
         import wavekit
+        import plotly.graph_objects as go
+        import plotly.express as px
 
         ns: dict[str, Any] = {
             **_BASE_GUARDS,
             "np": np,
             "Pattern": wavekit.Pattern,
             "MatchStatus": wavekit.MatchStatus,
+            "go": go,
+            "px": px,
             "open_reader": self._make_open_reader(),
             "VcdReader": self._make_reader_class(wavekit.VcdReader),
             "FsdbReader": self._make_reader_class(wavekit.FsdbReader),
@@ -435,6 +439,11 @@ class SessionManager:
             {"code": e.code, "error": e.error, "duration_ms": e.duration_ms}
             for e in entries
         ]
+
+    def save_plot(self, session_id: str, figure_var: str, base_url: str) -> dict[str, str | None]:
+        """Save a plotly Figure to HTML and PNG."""
+        session = self._get(session_id)
+        return session.save_plot(figure_var, base_url)
 
     def _get(self, session_id: str) -> SessionProxy:
         session = self._sessions.get(session_id)
@@ -725,3 +734,35 @@ class SessionProxy:
         max_h = self.config.limits.history_max
         if len(self.history) > max_h:
             self.history = self.history[-max_h:]
+
+    def save_plot(self, figure_var: str, base_url: str) -> dict[str, str | None]:
+        """Save a plotly Figure to HTML and PNG, return URLs."""
+        if self._closed:
+            raise RuntimeError("Session is closed. Call open_session() to create a new one.")
+        if self._crashed:
+            raise RuntimeError("Session has crashed. Call open_session() to create a new one.")
+
+        try:
+            self._parent_conn.send({
+                "type": "save_plot",
+                "figure_var": figure_var,
+            })
+
+            if self._parent_conn.poll(timeout=30):
+                msg = self._parent_conn.recv()
+
+                if msg["type"] == "save_plot_result":
+                    html_url = f"{base_url}/plots/{msg['html_filename']}"
+                    png_url = f"{base_url}/plots/{msg['png_filename']}" if msg.get("png_filename") else None
+                    return {"html_url": html_url, "png_url": png_url}
+                elif msg["type"] == "error":
+                    raise RuntimeError(msg["message"])
+                else:
+                    raise RuntimeError(f"Unknown response type: {msg['type']}")
+
+            else:
+                raise RuntimeError("save_plot timed out")
+
+        except (BrokenPipeError, ConnectionError, EOFError) as e:
+            self._detect_crash()
+            raise RuntimeError("Session crashed while saving plot") from e
