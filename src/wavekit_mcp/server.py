@@ -4,6 +4,7 @@ import argparse
 import logging
 import pydoc as _pydoc
 import tempfile
+from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,13 @@ from starlette.responses import FileResponse, JSONResponse
 from .config import Config, get_default_config_path
 from .session import SessionManager
 
-mcp = FastMCP("wavekit-mcp")
+# Get version from package metadata
+try:
+    __version__ = version("wavekit-mcp")
+except PackageNotFoundError:
+    __version__ = "unknown"
+
+mcp = FastMCP("wavekit-mcp", version=__version__)
 
 _manager: SessionManager | None = None
 _plots_dir: Path | None = None
@@ -681,6 +688,11 @@ def main() -> None:
         epilog="""
 Config file: ~/.config/wavekit-mcp/settings.toml (auto-created on first run)
         """,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"wavekit-mcp {__version__}",
     )
     parser.add_argument(
         "--config",
