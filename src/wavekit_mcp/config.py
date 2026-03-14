@@ -3,6 +3,54 @@ from __future__ import annotations
 import os
 import tomllib
 from dataclasses import dataclass, field
+from pathlib import Path
+
+
+# ── config paths ───────────────────────────────────────────────────────────────
+
+CONFIG_DIR = Path.home() / ".config" / "wavekit-mcp"
+
+
+def get_default_config_path() -> Path:
+    """Get default settings.toml path."""
+    return CONFIG_DIR / "settings.toml"
+
+
+def ensure_config_exists() -> None:
+    """Create default config file if it doesn't exist."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    config_file = get_default_config_path()
+    if not config_file.exists():
+        default_config = """\
+# wavekit-mcp configuration
+# https://github.com/your-org/wavekit-mcp
+
+[limits]
+max_sessions = 5
+run_timeout_sec = 120
+output_max_chars = 500
+
+[file_access]
+read_enabled = false
+write_enabled = false
+# read_allowed_paths = ["/tmp/**"]
+# write_allowed_paths = ["/tmp/**"]
+
+[log]
+file = ""
+level = "INFO"
+
+[server]
+transport = "stdio"  # stdio | streamable-http
+host = "0.0.0.0"
+port = 8080
+# plots_dir = ""  # empty = auto-create temp directory
+"""
+        config_file.write_text(default_config)
+
+
+# ── config dataclasses ─────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -47,8 +95,24 @@ class Config:
 
     @classmethod
     def load(cls, config_path: str | None = None) -> Config:
+        """
+        Load configuration from file.
+
+        Args:
+            config_path: Path to settings.toml. If None, uses default path
+                         (~/.config/wavekit-mcp/settings.toml) and creates it if missing.
+
+        Returns:
+            Config object with loaded or default values.
+        """
+        # Determine config path
+        if config_path is None:
+            ensure_config_exists()
+            config_path = str(get_default_config_path())
+
+        # Load from file
         data: dict = {}
-        if config_path:
+        if Path(config_path).exists():
             with open(config_path, "rb") as f:
                 data = tomllib.load(f)
 

@@ -11,7 +11,7 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 
-from .config import Config
+from .config import Config, get_default_config_path
 from .session import SessionManager
 
 mcp = FastMCP("wavekit-mcp")
@@ -675,25 +675,58 @@ def _setup_logging(config: Config) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="wavekit MCP server")
+    parser = argparse.ArgumentParser(
+        description="wavekit MCP server",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Config file: ~/.config/wavekit-mcp/settings.toml (auto-created on first run)
+        """,
+    )
     parser.add_argument(
         "--config",
         metavar="PATH",
         default=None,
-        help="Path to a TOML config file (optional; defaults apply if omitted)",
+        help="Path to settings.toml (default: ~/.config/wavekit-mcp/settings.toml)",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default=None,
+        help="Transport protocol (overrides config file)",
+    )
+    parser.add_argument(
+        "--host",
+        default=None,
+        help="Host for streamable-http mode (overrides config file, default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port for streamable-http mode (overrides config file, default: 8080)",
     )
     args = parser.parse_args()
 
+    # Load config
     config = Config.load(args.config)
     _setup_logging(config)
 
     log = logging.getLogger("wavekit_mcp")
-    srv = config.server
     log.info(
-        "server_start config=%s transport=%s",
-        args.config or "<defaults>",
-        srv.transport,
+        "server_start config=%s",
+        args.config or "<default>",
     )
+
+    # Apply CLI overrides
+    srv = config.server
+    if args.transport:
+        srv.transport = args.transport
+    if args.host:
+        srv.host = args.host
+    if args.port:
+        srv.port = args.port
+
+    log.info("transport=%s", srv.transport)
 
     # Create unique plots directory
     global _plots_dir
