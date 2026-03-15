@@ -81,6 +81,18 @@ def worker_main(conn: Any, config: Any, stderr_log_path: str | None = None) -> N
         config: Config object (passed via pickle)
         stderr_log_path: Path to log stderr output (for crash diagnostics)
     """
+    # Redirect stdin/stdout/stderr to avoid interfering with parent's stdio
+    # In stdio mode, parent's stdin/stdout are the MCP communication channel.
+    # Any output from worker would corrupt the protocol and cause hangs.
+    import os
+
+    # Redirect stdin to /dev/null (worker doesn't need input)
+    sys.stdin = open(os.devnull, "r")
+
+    # Redirect stdout to /dev/null (user code's print() is captured by redirect_stdout,
+    # but some libraries may write directly to sys.stdout or fd 1)
+    sys.stdout = open(os.devnull, "w")
+
     # Redirect stderr to log file for crash diagnostics
     if stderr_log_path:
         stderr_file = open(stderr_log_path, "w", encoding="utf-8")
@@ -143,6 +155,11 @@ def worker_main(conn: Any, config: Any, stderr_log_path: str | None = None) -> N
         session.close()
         try:
             conn.close()
+        except Exception:
+            pass
+        try:
+            sys.stdin.close()
+            sys.stdout.close()
         except Exception:
             pass
         if stderr_log_path:
