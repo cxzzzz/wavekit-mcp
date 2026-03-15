@@ -552,8 +552,10 @@ class SessionProxy:
         # Create pipe for bidirectional communication
         self._parent_conn, child_conn = multiprocessing.Pipe()
 
-        # Spawn worker process
-        self._process = multiprocessing.Process(
+        # Spawn worker process using 'spawn' method to avoid inheriting
+        # parent's file descriptors (stdin/stdout are MCP communication channel)
+        ctx = multiprocessing.get_context("spawn")
+        self._process = ctx.Process(
             target=worker_main,
             args=(child_conn, config, self._stderr_path),
             name=f"session-{session_id}",
