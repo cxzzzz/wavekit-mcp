@@ -13,6 +13,7 @@ import traceback
 import uuid
 import warnings
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -378,7 +379,7 @@ class SessionManager:
         self._lock = threading.Lock()
         self._log = logging.getLogger("wavekit_mcp")
 
-    def open_session(self) -> str:
+    def open_session(self, description: str | None = None) -> str:
         with self._lock:
             max_s = self.config.limits.max_sessions
             if len(self._sessions) >= max_s:
@@ -387,9 +388,21 @@ class SessionManager:
                     "Call close_session() to free one first."
                 )
             sid = uuid.uuid4().hex[:8]
-            self._sessions[sid] = SessionProxy(sid, self.config)
+            self._sessions[sid] = SessionProxy(sid, self.config, description)
             self._log.info("session_open sid=%s total=%d", sid, len(self._sessions))
             return sid
+
+    def list_sessions(self) -> list[dict]:
+        """Return info about all active sessions."""
+        with self._lock:
+            return [
+                {
+                    "session_id": sid,
+                    "description": proxy.description,
+                    "created_at": proxy.created_at,
+                }
+                for sid, proxy in self._sessions.items()
+            ]
 
     def close_session(self, session_id: str) -> None:
         with self._lock:
@@ -535,9 +548,11 @@ class SessionProxy:
     an appropriate error message instead of bringing down the main process.
     """
 
-    def __init__(self, session_id: str, config: Config):
+    def __init__(self, session_id: str, config: Config, description: str | None = None):
         self.session_id = session_id
         self.config = config
+        self.description = description
+        self.created_at = datetime.now().isoformat()
         self._last_code: str | None = None
         self.history: list[HistoryEntry] = []
         self._log = logging.getLogger("wavekit_mcp")

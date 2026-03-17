@@ -37,8 +37,11 @@ def _get_manager() -> SessionManager:
 # ── tools ─────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
-def open_session() -> str:
+def open_session(description: str | None = None) -> str:
     """Create a new persistent Python execution session for waveform analysis.
+
+    Args:
+        description: Optional description to identify this session (shown in list_sessions)
 
     Returns a session_id used by all other tools.
 
@@ -63,7 +66,7 @@ def open_session() -> str:
 
     IMPORTANT: Do NOT use `import wavekit` — all wavekit objects are pre-injected.
     """
-    return _get_manager().open_session()
+    return _get_manager().open_session(description)
 
 
 @mcp.tool()
@@ -71,6 +74,18 @@ def close_session(session_id: str) -> str:
     """Close a session and release all resources (open readers, memory)."""
     _get_manager().close_session(session_id)
     return f"Session '{session_id}' closed."
+
+
+@mcp.tool()
+def list_sessions() -> list[dict]:
+    """List all active sessions.
+
+    Returns a list with each entry containing:
+      session_id   — the session identifier
+      description  — user-provided description (may be None)
+      created_at   — creation timestamp (ISO format string)
+    """
+    return _get_manager().list_sessions()
 
 
 @mcp.tool()

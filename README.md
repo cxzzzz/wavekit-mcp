@@ -62,9 +62,10 @@ WAVEKIT_MCP_RUN_TIMEOUT_SEC=300 wavekit-mcp
 
 | Tool | Description |
 |------|-------------|
-| `open_session()` | Create a session; returns `session_id` |
+| `open_session(description?)` | Create a session; returns `session_id` |
 | `close_session(sid)` | Release all resources |
 | `reset_session(sid)` | Clear variables, keep session |
+| `list_sessions()` | List all active sessions with id, description, created_at |
 | `run(sid, code)` | Execute Python; returns `{result, output, error, duration_ms}` |
 | `get_history(sid, n)` | Last N execution records |
 | `get_api_docs(topic)` | wavekit API reference |
@@ -109,3 +110,7 @@ print(f"transactions={len(valid.duration.value)}  mean={np.mean(valid.duration.v
 ## Security
 
 Code runs under [RestrictedPython](https://restrictedpython.readthedocs.io/): `import` is blocked, `__class__` / `__bases__` access is blocked, and file I/O is disabled by default. Designed to prevent accidental operations, not to sandbox fully untrusted code.
+
+## More
+
+See [SKILLS.md](./SKILLS.md) for a cheatsheet of common patterns.
