@@ -69,6 +69,7 @@ WAVEKIT_MCP_RUN_TIMEOUT_SEC=300 wavekit-mcp
 | `run(sid, code)` | Execute Python; returns `{result, output, error, duration_ms}` |
 | `get_history(sid, n)` | Last N execution records |
 | `get_api_docs(topic)` | wavekit API reference |
+| `save_plot(sid, figure_var)` | Save plotly Figure to HTML/PNG; returns path (stdio) or URL (http) |
 
 Every session has these pre-injected: `open_reader(path)`, `np`, `Pattern`, `MatchStatus`.
 

@@ -453,10 +453,10 @@ class SessionManager:
             for e in entries
         ]
 
-    def save_plot(self, session_id: str, figure_var: str, base_url: str) -> dict[str, str | None]:
-        """Save a plotly Figure to HTML and PNG."""
+    def save_plot(self, session_id: str, figure_var: str) -> dict[str, str | None]:
+        """Save a plotly Figure to HTML and PNG, return filenames."""
         session = self._get(session_id)
-        return session.save_plot(figure_var, base_url)
+        return session.save_plot(figure_var)
 
     def _get(self, session_id: str) -> SessionProxy:
         session = self._sessions.get(session_id)
@@ -752,8 +752,8 @@ class SessionProxy:
         if len(self.history) > max_h:
             self.history = self.history[-max_h:]
 
-    def save_plot(self, figure_var: str, base_url: str) -> dict[str, str | None]:
-        """Save a plotly Figure to HTML and PNG, return URLs."""
+    def save_plot(self, figure_var: str) -> dict[str, str | None]:
+        """Save a plotly Figure to HTML and PNG, return filenames."""
         if self._closed:
             raise RuntimeError("Session is closed. Call open_session() to create a new one.")
         if self._crashed:
@@ -769,9 +769,10 @@ class SessionProxy:
                 msg = self._parent_conn.recv()
 
                 if msg["type"] == "save_plot_result":
-                    html_url = f"{base_url}/plots/{msg['html_filename']}"
-                    png_url = f"{base_url}/plots/{msg['png_filename']}" if msg.get("png_filename") else None
-                    return {"html_url": html_url, "png_url": png_url}
+                    return {
+                        "html_filename": msg["html_filename"],
+                        "png_filename": msg.get("png_filename"),
+                    }
                 elif msg["type"] == "error":
                     raise RuntimeError(msg["message"])
                 else:

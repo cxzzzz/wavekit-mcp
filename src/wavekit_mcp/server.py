@@ -218,23 +218,24 @@ def get_api_docs(topic: str = "") -> str:
 def save_plot(
     session_id: str,
     figure_var: str,
-    base_url: str = "http://localhost:8080",
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     """Save a plotly Figure to interactive HTML and static PNG.
 
     Args:
         session_id: Session ID from open_session()
         figure_var: Name of the plotly Figure variable in the session
-        base_url: Base URL for generating clickable links (default: http://localhost:8080)
 
     Returns:
-        {
-            "html_url": "http://localhost:8080/plots/plot_a1b2c3.html",
-            "png_url": "http://localhost:8080/plots/plot_a1b2c3.png"  # or null if PNG failed
-        }
-
-    html_url: Interactive plot for viewing in browser. Download if you need long-term access.
-    png_url: Static image for embedding in documents. Download if you need long-term access.
+        In stdio mode (file paths):
+            {
+                "html_path": "/tmp/wavekit_plots_xxx/plot_a1b2c3.html",
+                "png_path": "/tmp/wavekit_plots_xxx/plot_a1b2c3.png"  # or null if PNG failed
+            }
+        In streamable-http mode (URLs):
+            {
+                "html_url": "http://localhost:8080/plots/plot_a1b2c3.html",
+                "png_url": "http://localhost:8080/plots/plot_a1b2c3.png"  # or null if PNG failed
+            }
 
     Example:
         # First create a figure in the session
@@ -243,9 +244,28 @@ def save_plot(
 
         # Then save it
         result = save_plot(sid, "fig")
-        # Tell user to open result["html_url"] in browser
+        # stdio mode: open result["html_path"] with file:// or browser
+        # http mode: open result["html_url"] in browser
     """
-    return _get_manager().save_plot(session_id, figure_var, base_url)
+    global _plots_dir
+    manager = _get_manager()
+    result = manager.save_plot(session_id, figure_var)
+
+    html_filename = result["html_filename"]
+    png_filename = result.get("png_filename")
+
+    # Return file paths in stdio mode, URLs in http mode
+    if manager.config.server.transport == "stdio":
+        return {
+            "html_path": str(_plots_dir / html_filename),
+            "png_path": str(_plots_dir / png_filename) if png_filename else None,
+        }
+    else:
+        base_url = f"http://{manager.config.server.host}:{manager.config.server.port}"
+        return {
+            "html_url": f"{base_url}/plots/{html_filename}",
+            "png_url": f"{base_url}/plots/{png_filename}" if png_filename else None,
+        }
 
 
 # ── HTTP routes for plot serving ───────────────────────────────────────────────
