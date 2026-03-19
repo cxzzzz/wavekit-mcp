@@ -24,7 +24,7 @@ def ensure_config_exists() -> None:
     if not config_file.exists():
         default_config = """\
 # wavekit-mcp configuration
-# https://github.com/your-org/wavekit-mcp
+# https://github.com/cxzzzz/wavekit-mcp
 
 [limits]
 max_sessions = 5

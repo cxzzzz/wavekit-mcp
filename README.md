@@ -1,6 +1,6 @@
 # wavekit-mcp
 
-An MCP server that gives AI assistants a persistent, sandboxed Python environment for waveform analysis using [wavekit](https://github.com/xxx/wavekit).
+An MCP server that gives AI assistants a persistent, sandboxed Python environment for waveform analysis using [wavekit](https://github.com/cxzzzz/wavekit).
 
 The AI can open VCD/FSDB files, load and manipulate waveforms, run temporal pattern matching, and iterate across multiple tool calls — all within a shared execution context that persists state between calls.
 
