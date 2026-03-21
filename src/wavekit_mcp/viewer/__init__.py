@@ -6,38 +6,27 @@ viewer through the WCP (Waveform Control Protocol).
 Usage in session:
     viewer = Viewer()
     viewer.start()
-    viewer.top_group.append(waveform)
+    viewer.waveforms.append(waveform1)
+    viewer.waveforms.append(waveform2)
+    viewer.markers.append(time=1000, name="event")
     viewer.push_state()
     print(viewer.url)
     viewer.close()
 """
 
-from .items import (
-    DisplayItem,
-    DividerItem,
-    GroupItem,
-    ItemType,
-    MarkerItem,
-    MarkerList,
-    WaveformItem,
-)
+from .items import MarkerItem, MarkerList
 from .instance import Viewer, ViewerConfig, ViewerInstance
 from .wcp_client import WcpClient, WcpError
 
 __all__ = [
-    # Item types for building display hierarchy
-    "DisplayItem",
-    "DividerItem",
-    "GroupItem",
-    "ItemType",
+    # Markers
     "MarkerItem",
     "MarkerList",
-    "WaveformItem",
     # Viewer
     "Viewer",
     "ViewerConfig",
     "ViewerInstance",  # Backward compatibility alias
-    # WCP client (for testing)
+    # WCP client (for testing/advanced usage)
     "WcpClient",
     "WcpError",
 ]

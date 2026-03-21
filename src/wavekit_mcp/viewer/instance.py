@@ -19,11 +19,14 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from .items import DividerItem, DisplayItem, GroupItem, MarkerItem, MarkerList, WaveformItem
+from .items import MarkerItem, MarkerList
 from .wcp_client import WcpClient, WcpError
 from .vcd_writer import generate_merged_vcd, get_wcp_signal_name
+
+if TYPE_CHECKING:
+    from wavekit import Waveform
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +57,9 @@ class Viewer:
     Usage:
         viewer = Viewer()
         url = viewer.start()  # Returns "gui://surfer" or "file:///path/to/vcd"
-        viewer.top_group.append(waveform)
+        viewer.waveforms.append(waveform1)
+        viewer.waveforms.append(waveform2)
+        viewer.markers.append(time=1000, name="event")
         viewer.push_state()
         print(viewer.url)
         viewer.close()
@@ -70,10 +75,11 @@ class Viewer:
         self._mode: Literal["gui", "fallback"] | None = None
 
         # State - user modifies these, then calls push_state()
-        self.top_group: GroupItem = GroupItem(name="top")
+        self.waveforms: list[Waveform] = []
         self.markers: MarkerList = MarkerList()
 
-        # VCD file path
+        # Internal state
+        self._signal_ids: dict[str, int] = {}  # signal_name -> Surfer item_id
         self._vcd_path: str | None = None
 
     # =========================================================================
@@ -264,7 +270,6 @@ address = "127.0.0.1:{wcp_port}"
 
         # Clean up temp config directory (only in GUI mode)
         if self._mode == "gui" and hasattr(self, "_config_dir") and self._config_dir:
-            import shutil
             try:
                 shutil.rmtree(self._config_dir)
             except Exception as e:
@@ -273,6 +278,7 @@ address = "127.0.0.1:{wcp_port}"
 
         self._mode = None
         self._vcd_path = None
+        self._signal_ids.clear()
         logger.info("Viewer closed")
 
     @property
@@ -300,28 +306,6 @@ address = "127.0.0.1:{wcp_port}"
     # State sync
     # =========================================================================
 
-    def pull_state(self) -> None:
-        """
-        Pull current state from Surfer into top_group and markers.
-
-        Note: Only supported in GUI mode.
-        """
-        if self._mode == "fallback":
-            raise RuntimeError("pull_state() is not supported in fallback mode")
-
-        if not self._wcp:
-            raise RuntimeError("Viewer not started")
-
-        # Get displayed items
-        item_ids = self._loop.run_until_complete(self._wcp.get_item_list())
-        items_info = self._loop.run_until_complete(
-            self._wcp.get_item_info(item_ids)
-        ) if item_ids else []
-
-        # Build GroupItem tree from items
-        self.top_group = self._build_group_tree(items_info)
-        self.markers = MarkerList()
-
     def push_state(self) -> None:
         """
         Push current state to the viewer.
@@ -332,41 +316,33 @@ address = "127.0.0.1:{wcp_port}"
         if self._vcd_path is None:
             raise RuntimeError("Viewer not started")
 
-        # Get all visible WaveformItems
-        visible_waveforms = list(self.top_group.walk_waveforms(include_hidden=False))
-
-        if not visible_waveforms:
+        if not self.waveforms:
             if self._mode == "gui" and self._wcp:
                 self._loop.run_until_complete(self._wcp.clear())
             return
 
         # Generate merged VCD
-        generate_merged_vcd(visible_waveforms, self._vcd_path)
+        generate_merged_vcd(self.waveforms, self._vcd_path)
         logger.debug("Generated VCD: %s", self._vcd_path)
 
         if self._mode == "gui" and self._wcp:
             # GUI mode: use WCP to load and add variables
             self._loop.run_until_complete(self._wcp.clear())
             self._loop.run_until_complete(self._wcp.load(self._vcd_path))
+            self._signal_ids.clear()
 
             # Add visible variables
-            for item in self.top_group.walk(include_hidden=False):
-                if isinstance(item, WaveformItem) and not item.hidden:
-                    if item.signal_name:
-                        # Use transformed name for WCP (avoids bit selector interpretation)
-                        wcp_name = get_wcp_signal_name(item.signal_name)
+            for wf in self.waveforms:
+                signal_name = wf.signal.full_name
+                if signal_name:
+                    # Use transformed name for WCP (avoids bit selector interpretation)
+                    wcp_name = get_wcp_signal_name(signal_name)
 
-                        ids = self._loop.run_until_complete(
-                            self._wcp.add_variables([wcp_name])
-                        )
-                        if ids:
-                            item.item_id = ids[0]
-
-                            # Set color if specified
-                            if item.color:
-                                self._loop.run_until_complete(
-                                    self._wcp.set_item_color(item.item_id, item.color)
-                                )
+                    ids = self._loop.run_until_complete(
+                        self._wcp.add_variables([wcp_name])
+                    )
+                    if ids:
+                        self._signal_ids[signal_name] = ids[0]
 
             # Add markers
             markers_list = self.markers.to_list()
@@ -413,63 +389,15 @@ address = "127.0.0.1:{wcp_port}"
         if self._wcp:
             self._loop.run_until_complete(self._wcp.reload())
 
-    def focus(self, item: DisplayItem) -> None:
-        """Focus (scroll to) an item in the viewer (GUI mode only)."""
+    def focus(self, signal_name: str) -> None:
+        """Focus (scroll to) a signal in the viewer (GUI mode only)."""
         if self._mode == "fallback":
             raise RuntimeError("focus() is not supported in fallback mode")
         if not self._wcp:
             raise RuntimeError("Viewer not started")
-        if item.item_id is None:
-            raise ValueError("Item not yet added to Surfer (call push_state first)")
-        self._loop.run_until_complete(self._wcp.focus_item(item.item_id))
-
-    # =========================================================================
-    # Helpers
-    # =========================================================================
-
-    def _build_group_tree(self, items_info: list[dict]) -> GroupItem:
-        """Build a GroupItem tree from WCP item info."""
-        top_group = GroupItem(name="top")
-
-        for info in items_info:
-            item_type = info.get("type", "Variable")
-            name = info.get("name", "")
-            item_id = info.get("id")
-
-            if item_type != "Variable":
-                continue
-
-            # Parse scope from full name
-            if '.' in name:
-                parts = name.split('.')
-                signal_name = parts[-1]
-                scope_parts = parts[:-1]
-            else:
-                signal_name = name
-                scope_parts = []
-
-            # Navigate/create scope path
-            current_group = top_group
-            for scope_part in scope_parts:
-                found = None
-                for child in current_group.children:
-                    if isinstance(child, GroupItem) and child.name == scope_part:
-                        found = child
-                        break
-
-                if found:
-                    current_group = found
-                else:
-                    new_group = GroupItem(name=scope_part)
-                    current_group.children.append(new_group)
-                    current_group = new_group
-
-            # Create placeholder WaveformItem
-            item = WaveformItem(item_id=item_id, _waveform=None)
-            item.display_name = name
-            current_group.children.append(item)
-
-        return top_group
+        if signal_name not in self._signal_ids:
+            raise ValueError(f"Signal '{signal_name}' not found. Call push_state first.")
+        self._loop.run_until_complete(self._wcp.focus_item(self._signal_ids[signal_name]))
 
     def __repr__(self) -> str:
         if self._mode == "gui":

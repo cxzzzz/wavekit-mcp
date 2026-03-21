@@ -2,7 +2,7 @@
 
 Run with: pytest -m integration tests/test_instance.py
 
-These tests require the 'surfer' or 'surver' binary to be installed and available in PATH.
+These tests require the 'surfer' binary to be installed and available in PATH.
 """
 
 import pytest
@@ -13,7 +13,6 @@ from pathlib import Path
 
 # Check if Surfer is available
 SURFER_AVAILABLE = shutil.which("surfer") is not None
-SURVER_AVAILABLE = shutil.which("surver") is not None
 
 
 @pytest.fixture
@@ -38,7 +37,7 @@ def viewer(viewer_config):
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not (SURFER_AVAILABLE or SURVER_AVAILABLE), reason="Neither surfer nor surver binary found")
+@pytest.mark.skipif(not SURFER_AVAILABLE, reason="Surfer binary not found")
 class TestViewer:
     """Integration tests for Viewer."""
 
@@ -49,10 +48,10 @@ class TestViewer:
         viewer = Viewer(viewer_config)
 
         url = viewer.start()
-        # URL can be gui://surfer (GUI mode) or http://localhost:PORT (server mode)
-        assert url.startswith("gui://") or url.startswith("http://localhost:")
+        # URL can be gui://surfer (GUI mode) or file:// (fallback mode)
+        assert url.startswith("gui://") or url.startswith("file://")
         assert viewer.is_running
-        assert viewer.mode in ("gui", "server")
+        assert viewer.mode in ("gui", "fallback")
 
         viewer.close()
         assert not viewer.is_running
@@ -61,11 +60,11 @@ class TestViewer:
     def test_url_property(self, viewer):
         """Test URL property."""
         url = viewer.url
-        assert url.startswith("gui://") or url.startswith("http://localhost:")
+        assert url.startswith("gui://") or url.startswith("file://")
 
     def test_mode_property(self, viewer):
         """Test mode property."""
-        assert viewer.mode in ("gui", "server")
+        assert viewer.mode in ("gui", "fallback")
 
 
 @pytest.mark.integration
@@ -163,7 +162,7 @@ $var wire 1 a 1 $end
         gui_viewer_with_waveforms._loop.run_until_complete(gui_viewer_with_waveforms._wcp.load(sample_vcd))
 
         ids = gui_viewer_with_waveforms._loop.run_until_complete(
-            gui_viewer_with_waveforms._wcp.add_variables(["top.clk", "top.data[7:0]"])
+            gui_viewer_with_waveforms._wcp.add_variables(["top.clk", "top.data_7_0_"])
         )
         assert len(ids) == 2
 
@@ -171,56 +170,36 @@ $var wire 1 a 1 $end
         item_list = gui_viewer_with_waveforms._loop.run_until_complete(gui_viewer_with_waveforms._wcp.get_item_list())
         assert len(item_list) == 2
 
-    def test_pull_state(self, gui_viewer_with_waveforms, sample_vcd):
-        """Test pull_state after loading and adding variables."""
-        gui_viewer_with_waveforms._loop.run_until_complete(gui_viewer_with_waveforms._wcp.load(sample_vcd))
-        gui_viewer_with_waveforms._loop.run_until_complete(gui_viewer_with_waveforms._wcp.add_variables(["top.clk"]))
-
-        gui_viewer_with_waveforms.pull_state()
-
-        # pull_state updates self.top_group in place
-        assert gui_viewer_with_waveforms.top_group is not None
-        # Should have at least one item
-        assert gui_viewer_with_waveforms.top_group.children or len(list(gui_viewer_with_waveforms.top_group.walk())) >= 1
-
 
 @pytest.mark.integration
-@pytest.mark.skipif(not SURVER_AVAILABLE, reason="Surver binary not found")
-class TestViewerServer:
-    """Integration tests for server mode."""
+@pytest.mark.skipif(not SURFER_AVAILABLE, reason="Surfer binary not found")
+class TestViewerFallback:
+    """Integration tests for fallback mode."""
 
     @pytest.fixture
-    def server_viewer(self, viewer_config):
-        """Create a server mode viewer."""
+    def fallback_viewer(self, viewer_config):
+        """Create a fallback mode viewer."""
         from wavekit_mcp.viewer import Viewer
 
         v = Viewer(viewer_config)
         try:
             v.start()
-            if v.mode != "server":
-                pytest.skip("Server mode not available (GUI mode was used)")
+            if v.mode != "fallback":
+                pytest.skip("Fallback mode not used (GUI mode was available)")
             yield v
         finally:
             v.close()
 
-    def test_server_mode_url(self, server_viewer):
-        """Test that server mode returns HTTP URL."""
-        assert server_viewer.url.startswith("http://localhost:")
+    def test_fallback_mode_url(self, fallback_viewer):
+        """Test that fallback mode returns file:// URL."""
+        assert fallback_viewer.url.startswith("file://")
 
-    def test_push_state_empty(self, server_viewer):
-        """Test push_state with empty content in server mode."""
+    def test_push_state_empty(self, fallback_viewer):
+        """Test push_state with empty content in fallback mode."""
         # Should not raise
-        server_viewer.push_state()
+        fallback_viewer.push_state()
 
-    def test_pull_state_not_supported(self, server_viewer):
-        """Test that pull_state raises error in server mode."""
-        with pytest.raises(RuntimeError, match="not supported in server mode"):
-            server_viewer.pull_state()
-
-    def test_focus_not_supported(self, server_viewer):
-        """Test that focus raises error in server mode."""
-        from wavekit_mcp.viewer import WaveformItem
-
-        item = WaveformItem(item_id="test", _waveform=None)
-        with pytest.raises(RuntimeError, match="not supported in server mode"):
-            server_viewer.focus(item)
+    def test_focus_not_supported(self, fallback_viewer):
+        """Test that focus raises error in fallback mode."""
+        with pytest.raises(RuntimeError, match="not supported in fallback mode"):
+            fallback_viewer.focus("test.signal")

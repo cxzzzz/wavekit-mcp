@@ -1,6 +1,6 @@
 """VCD file generation for Viewer.
 
-This module provides utilities to generate VCD files from WaveformItem objects.
+This module provides utilities to generate VCD files from Waveform objects.
 All waveforms are merged into a single VCD file for loading into Surfer.
 """
 
@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from .items import WaveformItem
+    from wavekit import Waveform
 
 
 def transform_signal_name(name: str) -> str:
@@ -69,18 +69,18 @@ def get_wcp_signal_name(original_full_name: str) -> str:
 
 
 def generate_merged_vcd(
-    waveforms: list[WaveformItem],
+    waveforms: list[Waveform],
     output_path: str | None = None,
     timescale: str = "1ps",
 ) -> str:
     """
-    Generate a VCD file from multiple WaveformItem objects.
+    Generate a VCD file from multiple Waveform objects.
 
     All waveforms are merged into a single VCD file. Signal scopes are
     preserved based on their full_name paths.
 
     Args:
-        waveforms: List of WaveformItem objects
+        waveforms: List of Waveform objects
         output_path: Output file path. If None, creates a temp file.
         timescale: VCD timescale (default: "1ps" for typical simulation outputs)
 
@@ -116,20 +116,12 @@ def generate_merged_vcd(
             registered_names = {}  # (scope, name) -> full_name (for duplicate detection)
 
             for wf in waveforms:
-                # Check for signal name first - must be set
-                full_name = wf.signal_name
+                # Get signal name - must be set
+                full_name = wf.signal.full_name
                 if full_name is None:
                     raise ValueError(
                         f"Waveform has no signal name. "
-                        f"Please explicitly set the signal name, e.g., "
-                        f"`item.signal_name = 'top.signal'` or use `WaveformItem(signal_name='...')`."
-                    )
-
-                # Check for waveform data
-                if wf.waveform is None:
-                    raise ValueError(
-                        f"Waveform '{full_name}' has no waveform data. "
-                        f"Please load waveform data before adding to viewer."
+                        f"Please explicitly set the signal name."
                     )
 
                 # Parse scope and signal name
@@ -167,10 +159,7 @@ def generate_merged_vcd(
             changes = []
 
             for wf in waveforms:
-                if wf.waveform is None:
-                    continue
-
-                full_name = wf.signal_name
+                full_name = wf.signal.full_name
                 if full_name is None or full_name not in vars_map:
                     continue
 
@@ -190,8 +179,8 @@ def generate_merged_vcd(
             # Find max time across all waveforms to ensure VCD time range is correct
             max_time = 0
             for wf in waveforms:
-                if wf.waveform is not None and len(wf.waveform.time) > 0:
-                    t = int(wf.waveform.time[-1])
+                if len(wf.time) > 0:
+                    t = int(wf.time[-1])
                     if t > max_time:
                         max_time = t
 

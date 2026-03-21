@@ -239,7 +239,7 @@ class Session:
         import wavekit
 
         # Import viewer components for injection
-        from .viewer import Viewer, GroupItem, DividerItem, MarkerItem, WaveformItem
+        from .viewer import Viewer, MarkerItem
 
         ns: dict[str, Any] = {
             **_BASE_GUARDS,
@@ -251,11 +251,8 @@ class Session:
             "FsdbReader": self._make_reader_class(wavekit.FsdbReader),
             # Viewer class - user creates instance with Viewer()
             "Viewer": self._make_viewer_class(Viewer),
-            # Item types for building display hierarchy
-            "GroupItem": GroupItem,
-            "DividerItem": DividerItem,
+            # Marker type for viewer
             "MarkerItem": MarkerItem,
-            "WaveformItem": WaveformItem,
         }
 
         if self.config.file_access.read_enabled or self.config.file_access.write_enabled:
