@@ -138,21 +138,24 @@ class WcpClient:
     # =========================================================================
 
     async def _send_raw(self, obj: dict) -> None:
-        """Send a JSON object followed by newline."""
+        """Send a JSON object followed by null byte (WCP protocol)."""
         if not self._writer:
             raise ConnectionError("Not connected")
-        data = json.dumps(obj) + "\n"
+        # WCP uses null byte (\0) as message delimiter, not newline
+        data = json.dumps(obj) + "\0"
         self._writer.write(data.encode("utf-8"))
         await self._writer.drain()
 
     async def _recv_raw(self) -> dict:
-        """Receive a JSON object (newline-delimited)."""
+        """Receive a JSON object (null-byte delimited)."""
         if not self._reader:
             raise ConnectionError("Not connected")
-        line = await self._reader.readline()
-        if not line:
+        # Read until null byte
+        data = await self._reader.readuntil(b"\0")
+        if not data:
             raise ConnectionError("Connection closed by server")
-        return json.loads(line.decode("utf-8"))
+        # Remove the null byte and parse JSON
+        return json.loads(data[:-1].decode("utf-8"))
 
     async def _send_command(self, command: str, **kwargs) -> dict:
         """
@@ -160,7 +163,7 @@ class WcpClient:
 
         Args:
             command: Command name
-            **kwargs: Command arguments
+            **kwargs: Command arguments (placed at top level, not in "arguments")
 
         Returns:
             Response dict
@@ -168,7 +171,9 @@ class WcpClient:
         Raises:
             WcpError: If server returns an error
         """
-        msg = {"type": command, **kwargs}
+        # WCP format: {"type": "command", "command": "cmd_name", ...kwargs}
+        # Note: arguments are placed at top level, not in an "arguments" object
+        msg = {"type": "command", "command": command, **kwargs}
         await self._send_raw(msg)
         response = await self._recv_raw()
 
@@ -303,9 +308,9 @@ class WcpClient:
 
         Args:
             markers: List of marker dicts, each with:
-                - time: Timestamp
-                - name: Optional name
-                - move_focus: If True, scroll to the marker
+                - time: Timestamp (required)
+                - name: Optional name (default: "")
+                - move_focus: If True, scroll to the marker (required, no default)
 
         Returns:
             List of assigned marker IDs

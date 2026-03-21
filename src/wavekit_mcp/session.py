@@ -239,7 +239,7 @@ class Session:
         import wavekit
 
         # Import viewer components for injection
-        from .viewer import Viewer, GroupItem, DividerItem, MarkerItem
+        from .viewer import Viewer, GroupItem, DividerItem, MarkerItem, WaveformItem
 
         ns: dict[str, Any] = {
             **_BASE_GUARDS,
@@ -255,16 +255,16 @@ class Session:
             "GroupItem": GroupItem,
             "DividerItem": DividerItem,
             "MarkerItem": MarkerItem,
+            "WaveformItem": WaveformItem,
         }
 
         if self.config.file_access.read_enabled or self.config.file_access.write_enabled:
             ns["open"] = self._make_safe_open()
 
-        # Add guarded import if allowed_imports is configured
+        # Add guarded import (always, with friendly error for disallowed imports)
         allowed_imports = self.config.sandbox.allowed_imports
-        if allowed_imports:
-            ns["__builtins__"] = dict(ns["__builtins__"])
-            ns["__builtins__"]["__import__"] = _make_guarded_import(allowed_imports)
+        ns["__builtins__"] = dict(ns["__builtins__"])
+        ns["__builtins__"]["__import__"] = _make_guarded_import(allowed_imports)
 
         self.namespace = ns
 
