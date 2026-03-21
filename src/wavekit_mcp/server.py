@@ -3,17 +3,14 @@ from __future__ import annotations
 import argparse
 import logging
 import pydoc as _pydoc
-import tempfile
 from importlib.metadata import version, PackageNotFoundError
-from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
-from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
 
-from .config import Config, get_default_config_path
-from .session import SessionManager
+from .config import Config
+from .session import SessionManager, set_viewer_registry
+from .viewer import ViewerRegistry
 
 # Get version from package metadata
 try:
@@ -24,7 +21,7 @@ except PackageNotFoundError:
 mcp = FastMCP("wavekit-mcp", version=__version__)
 
 _manager: SessionManager | None = None
-_plots_dir: Path | None = None
+_viewer_registry: ViewerRegistry | None = None
 
 
 def _get_manager() -> SessionManager:
@@ -52,8 +49,6 @@ def open_session(description: str | None = None) -> str:
       np                 — numpy
       Pattern            — wavekit.Pattern  (temporal pattern matching DSL)
       MatchStatus        — wavekit.MatchStatus
-      go                 — plotly.graph_objects (for creating figures)
-      px                 — plotly.express (for quick plots)
       open(path, mode)   — standard file I/O (only if enabled in server config,
                            restricted to configured allowed paths)
 
@@ -103,7 +98,7 @@ def reset_session(session_id: str) -> str:
 def run(session_id: str, code: str) -> dict[str, Any]:
     """Execute Python code in a persistent session. State persists across calls.
 
-    PRE-INJECTED: VcdReader(path), FsdbReader(path), open_reader(path), np, Pattern, MatchStatus, go, px
+    PRE-INJECTED: VcdReader(path), FsdbReader(path), open_reader(path), np, Pattern, MatchStatus
     Do NOT use `import wavekit` — all objects are already available.
     UNFAMILIAR WITH THE API? Call get_api_docs(session_id) before writing code.
 
@@ -113,13 +108,6 @@ def run(session_id: str, code: str) -> dict[str, Any]:
         # or use open_reader() for auto-detection by extension
         r3 = open_reader("/path/to/sim.vcd")    # .vcd → VcdReader, other → FsdbReader
         # multiple readers allowed; all auto-closed on reset/close
-
-    VISUALIZATION (plotly):
-        import plotly.graph_objects as go  # → use go directly (pre-injected)
-        import plotly.express as px        # → use px directly (pre-injected)
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=[1,2,3], y=[4,5,6]))
-        # Then call save_plot(session_id, "fig") to get a viewable URL
 
     MULTI-CALL WORKFLOW:
         # call 1 — load
@@ -215,89 +203,84 @@ def get_api_docs(topic: str = "") -> str:
 
 
 @mcp.tool()
-def save_plot(
-    session_id: str,
-    figure_var: str,
-) -> dict[str, str | None]:
-    """Save a plotly Figure to interactive HTML and static PNG.
+def open_viewer() -> dict:
+    """Create a new Viewer instance for waveform visualization.
 
-    Args:
-        session_id: Session ID from open_session()
-        figure_var: Name of the plotly Figure variable in the session
+    Returns a viewer_id that can be used in session code to control
+    a Surfer waveform viewer.
 
     Returns:
-        In stdio mode (file paths):
-            {
-                "html_path": "/tmp/wavekit_plots_xxx/plot_a1b2c3.html",
-                "png_path": "/tmp/wavekit_plots_xxx/plot_a1b2c3.png"  # or null if PNG failed
-            }
-        In streamable-http mode (URLs):
-            {
-                "html_url": "http://localhost:8080/plots/plot_a1b2c3.html",
-                "png_url": "http://localhost:8080/plots/plot_a1b2c3.png"  # or null if PNG failed
-            }
+        {
+            "viewer_id": "abc123",
+            "url": "http://localhost:12345"
+        }
 
-    Example:
-        # First create a figure in the session
-        run(sid, "fig = go.Figure()")
-        run(sid, "fig.add_trace(go.Scatter(x=data.clock, y=data.value))")
+    Usage in session:
+        viewer_id = open_viewer()["viewer_id"]
+        run(sid, f'''
+            # Get viewer proxy (viewer_id is bound in session)
+            viewer = get_viewer("{viewer_id}")
 
-        # Then save it
-        result = save_plot(sid, "fig")
-        # stdio mode: open result["html_path"] with file:// or browser
-        # http mode: open result["html_url"] in browser
+            # Load waveform data
+            wf = r.load_waveform("top.clk", clock="top.clk")
+
+            # Pull current state
+            viewer.pull_state()
+
+            # Add waveforms to display
+            viewer.top_group.append(wf)
+
+            # Push to viewer
+            viewer.push_state()
+
+            print(f"View at: {viewer.url}")
+        ''')
     """
-    global _plots_dir
-    manager = _get_manager()
-    result = manager.save_plot(session_id, figure_var)
+    global _viewer_registry
+    if _viewer_registry is None:
+        raise RuntimeError("Viewer registry not initialized")
 
-    html_filename = result["html_filename"]
-    png_filename = result.get("png_filename")
+    import asyncio
+    viewer_id, viewer = asyncio.run(_viewer_registry.create_viewer())
 
-    # Return file paths in stdio mode, URLs in http mode
-    if manager.config.server.transport == "stdio":
-        return {
-            "html_path": str(_plots_dir / html_filename),
-            "png_path": str(_plots_dir / png_filename) if png_filename else None,
-        }
-    else:
-        base_url = f"http://{manager.config.server.host}:{manager.config.server.port}"
-        return {
-            "html_url": f"{base_url}/plots/{html_filename}",
-            "png_url": f"{base_url}/plots/{png_filename}" if png_filename else None,
-        }
+    return {
+        "viewer_id": viewer_id,
+        "url": viewer.url,
+    }
 
 
-# ── HTTP routes for plot serving ───────────────────────────────────────────────
+@mcp.tool()
+def close_viewer(viewer_id: str) -> str:
+    """Close a viewer and release resources (Surfer process).
 
-@mcp.custom_route("/plots/{filename:path}", methods=["GET"])
-async def serve_plot(request: Request) -> FileResponse:
-    """Serve plot files (HTML and PNG)."""
-    global _plots_dir
-    if _plots_dir is None:
-        return JSONResponse({"error": "Plots directory not initialized"}, status_code=500)
+    Args:
+        viewer_id: The viewer ID returned by open_viewer()
+    """
+    global _viewer_registry
+    if _viewer_registry is None:
+        raise RuntimeError("Viewer registry not initialized")
 
-    filename = request.path_params.get("filename", "")
-    if not filename:
-        return JSONResponse({"error": "Filename required"}, status_code=400)
+    import asyncio
+    asyncio.run(_viewer_registry.close_viewer(viewer_id))
+    return f"Viewer '{viewer_id}' closed."
 
-    # Security: prevent path traversal
-    if ".." in filename or "/" in filename:
-        return JSONResponse({"error": "Invalid filename"}, status_code=400)
 
-    filepath = _plots_dir / filename
-    if not filepath.exists():
-        return JSONResponse({"error": "File not found"}, status_code=404)
+@mcp.tool()
+def list_viewers() -> list[dict]:
+    """List all active viewers.
 
-    # Determine content type
-    if filename.endswith(".html"):
-        media_type = "text/html"
-    elif filename.endswith(".png"):
-        media_type = "image/png"
-    else:
-        return JSONResponse({"error": "Unsupported file type"}, status_code=400)
+    Returns a list with each entry containing:
+        viewer_id   — the viewer identifier
+        url         — the HTTP URL for accessing Surfer
+    """
+    global _viewer_registry
+    if _viewer_registry is None:
+        return []
 
-    return FileResponse(filepath, media_type=media_type)
+    return [
+        {"viewer_id": vid, "url": _viewer_registry.get_viewer(vid).url}
+        for vid in _viewer_registry.list_viewers()
+    ]
 
 
 # ── resources ─────────────────────────────────────────────────────────────────
@@ -520,99 +503,6 @@ print(data.value.tolist())          # ✗ truncated
 
 ---
 
-## Visualization
-
-Use `go` (plotly.graph_objects) and `px` (plotly.express) for visualization.
-Both are pre-injected — no import needed.
-
-### Basic signal plot
-```python
-# Load waveform data
-data = r.load_waveform("tb.dut.signal[7:0]", clock="tb.clk")
-
-# Create figure
-fig = go.Figure()
-fig.add_trace(go.Scatter(
-    x=data.clock,
-    y=data.value,
-    mode='lines+markers',
-    name='signal'
-))
-fig.update_layout(
-    title="Signal Waveform",
-    xaxis_title="Clock Cycle",
-    yaxis_title="Value"
-)
-
-# Save and get URL for user
-# Call save_plot(session_id, "fig", base_url="http://localhost:8080")
-```
-
-### Multiple signals comparison
-```python
-signal_a = r.load_waveform("tb.dut.a[7:0]", clock="tb.clk")
-signal_b = r.load_waveform("tb.dut.b[7:0]", clock="tb.clk")
-
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=signal_a.clock, y=signal_a.value, name='a'))
-fig.add_trace(go.Scatter(x=signal_b.clock, y=signal_b.value, name='b'))
-fig.update_layout(title="Signal Comparison")
-```
-
-### Histogram / distribution
-```python
-fig = px.histogram(x=data.value, nbins=20, title="Value Distribution")
-```
-
-### Pattern match results
-```python
-result = Pattern().wait(req).wait(ack).timeout(64).match()
-valid = result.filter_valid()
-
-fig = go.Figure()
-fig.add_trace(go.Bar(
-    x=list(range(len(valid.duration.value))),
-    y=valid.duration.value
-))
-fig.update_layout(
-    title="Transaction Latency",
-    xaxis_title="Transaction #",
-    yaxis_title="Cycles"
-)
-```
-
-### Quick plots with px
-```python
-# Scatter plot
-fig = px.scatter(x=data.clock, y=data.value, title="Signal Over Time")
-
-# Line plot
-fig = px.line(x=data.clock, y=data.value, title="Signal Trace")
-
-# Bar chart
-fig = px.bar(x=['a', 'b', 'c'], y=[10, 20, 15], title="Comparison")
-```
-
-### save_plot usage
-```python
-# After creating fig = go.Figure(...) or fig = px.line(...)
-result = save_plot(sid, "fig", base_url="http://localhost:8080")
-
-# Returns:
-# {
-#   "html_url": "http://localhost:8080/plots/plot_xxx.html",
-#   "png_url": "http://localhost:8080/plots/plot_xxx.png"
-# }
-
-# Tell user to open html_url in browser for interactive viewing.
-# Download png_url if they need to embed in documents.
-```
-
-> **Note:** URLs are temporary — valid only while the MCP server is running.
-> Download files if long-term access is needed.
-
----
-
 ## Reading Log Files (if file access is enabled)
 
 ```python
@@ -775,18 +665,13 @@ Config file: ~/.config/wavekit-mcp/settings.toml (auto-created on first run)
 
     log.info("transport=%s", srv.transport)
 
-    # Create unique plots directory
-    global _plots_dir
-    if srv.plots_dir:
-        _plots_dir = Path(srv.plots_dir)
-        _plots_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        _plots_dir = Path(tempfile.mkdtemp(prefix="wavekit_plots_"))
-    srv.plots_dir = str(_plots_dir)  # Pass to workers via config
-    log.info("plots_dir=%s", _plots_dir)
-
     global _manager
     _manager = SessionManager(config)
+
+    # Initialize viewer registry
+    global _viewer_registry
+    _viewer_registry = ViewerRegistry(config)
+    set_viewer_registry(_viewer_registry)
 
     if srv.transport == "stdio":
         mcp.run(transport="stdio")

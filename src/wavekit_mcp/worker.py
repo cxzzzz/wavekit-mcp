@@ -8,65 +8,13 @@ crashes (e.g., segfault in a C library), the main process survives.
 from __future__ import annotations
 
 import faulthandler
+import logging
 import sys
 import traceback
-import uuid
 from pathlib import Path
 from typing import Any
 
-
-def _handle_save_plot(session: Any, msg: dict, config: Any) -> dict:
-    """Handle save_plot request in worker process."""
-    try:
-        import plotly.io as pio
-
-        figure_var = msg.get("figure_var")
-        if not figure_var:
-            return {"type": "error", "message": "figure_var is required"}
-
-        # Get the figure object from session namespace
-        fig = session.namespace.get(figure_var)
-        if fig is None:
-            return {"type": "error", "message": f"Variable '{figure_var}' not found in session"}
-
-        # Check if it's a plotly Figure
-        import plotly.graph_objects as go
-        if not isinstance(fig, go.Figure):
-            return {
-                "type": "error",
-                "message": f"Variable '{figure_var}' is not a plotly Figure (got {type(fig).__name__})"
-            }
-
-        # Get plots directory
-        plots_dir = Path(config.server.plots_dir)
-        if not plots_dir.exists():
-            return {"type": "error", "message": f"Plots directory does not exist: {plots_dir}"}
-
-        # Generate unique filename
-        filename = f"plot_{uuid.uuid4().hex[:8]}"
-        html_path = plots_dir / f"{filename}.html"
-        png_path = plots_dir / f"{filename}.png"
-
-        # Save HTML (with plotly.js from CDN for smaller file size)
-        pio.write_html(fig, str(html_path), include_plotlyjs='cdn', full_html=True)
-
-        # Save PNG
-        try:
-            pio.write_image(fig, str(png_path), scale=2)
-            png_filename = f"{filename}.png"
-        except Exception as e:
-            # PNG export may fail if kaleido has issues
-            png_filename = None
-
-        return {
-            "type": "save_plot_result",
-            "filename": filename,
-            "html_filename": f"{filename}.html",
-            "png_filename": png_filename,
-        }
-
-    except Exception as e:
-        return {"type": "error", "message": f"Failed to save plot: {e}\n{traceback.format_exc()}"}
+logger = logging.getLogger(__name__)
 
 
 def worker_main(conn: Any, config: Any, stderr_log_path: str | None = None) -> None:
@@ -105,6 +53,29 @@ def worker_main(conn: Any, config: Any, stderr_log_path: str | None = None) -> N
 
     session = Session("worker", config)
 
+    # Inject get_viewer function with IPC access
+    from .viewer.proxy import ViewerProxy
+
+    def get_viewer(viewer_id: str) -> ViewerProxy:
+        """
+        Get a ViewerProxy for the specified viewer.
+
+        Args:
+            viewer_id: The viewer ID (from open_viewer() MCP tool)
+
+        Returns:
+            ViewerProxy instance for communicating with the viewer.
+        """
+        if viewer_id is None:
+            raise ValueError(
+                "viewer_id is required. "
+                "Call open_viewer() first and pass the returned viewer_id."
+            )
+        # Create a proxy that uses the worker's IPC connection
+        return ViewerProxy(viewer_id, conn)
+
+    session.namespace["get_viewer"] = get_viewer
+
     try:
         while True:
             try:
@@ -131,9 +102,15 @@ def worker_main(conn: Any, config: Any, stderr_log_path: str | None = None) -> N
                 conn.send({"type": "ack"})
                 break
 
-            elif msg_type == "save_plot":
-                result = _handle_save_plot(session, msg, config)
-                conn.send(result)
+            elif msg_type == "viewer_op":
+                # Forward viewer operations to main process
+                # Main process routes to appropriate viewer worker
+                conn.send({
+                    "type": "viewer_op_forward",
+                    "viewer_id": msg.get("viewer_id"),
+                    "op": msg.get("op"),
+                    "args": msg.get("args"),
+                })
 
             else:
                 conn.send({

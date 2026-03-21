@@ -31,6 +31,16 @@ from .serializer import serialize_result
 from .worker import worker_main
 
 
+# Global viewer registry reference (set by server.py)
+_viewer_registry = None
+
+
+def set_viewer_registry(registry) -> None:
+    """Set the global viewer registry (called by server.py on startup)."""
+    global _viewer_registry
+    _viewer_registry = registry
+
+
 # ── RestrictedPython print bridge ─────────────────────────────────────────────
 
 class _StdoutPrinter:
@@ -194,19 +204,23 @@ class Session:
         self._close_readers()
 
         import wavekit
-        import plotly.graph_objects as go
-        import plotly.express as px
+
+        # Import viewer components for injection
+        from .viewer.items import GroupItem, DividerItem, MarkerItem
 
         ns: dict[str, Any] = {
             **_BASE_GUARDS,
             "np": np,
             "Pattern": wavekit.Pattern,
             "MatchStatus": wavekit.MatchStatus,
-            "go": go,
-            "px": px,
             "open_reader": self._make_open_reader(),
             "VcdReader": self._make_reader_class(wavekit.VcdReader),
             "FsdbReader": self._make_reader_class(wavekit.FsdbReader),
+            # Viewer helpers
+            "GroupItem": GroupItem,
+            "DividerItem": DividerItem,
+            "MarkerItem": MarkerItem,
+            # get_viewer is injected by worker_main with IPC access
         }
 
         if self.config.file_access.read_enabled or self.config.file_access.write_enabled:
@@ -453,11 +467,6 @@ class SessionManager:
             for e in entries
         ]
 
-    def save_plot(self, session_id: str, figure_var: str) -> dict[str, str | None]:
-        """Save a plotly Figure to HTML and PNG, return filenames."""
-        session = self._get(session_id)
-        return session.save_plot(figure_var)
-
     def _get(self, session_id: str) -> SessionProxy:
         session = self._sessions.get(session_id)
         if session is None:
@@ -611,6 +620,10 @@ class SessionProxy:
                     result = msg["data"]  # RunResult object directly
                     self._add_history(code, result.error, result.duration_ms)
                     return result
+                elif msg["type"] == "viewer_op_forward":
+                    # Forward viewer operation to main process and return result
+                    result = self._handle_viewer_op(msg)
+                    return result
                 elif msg["type"] == "error":
                     result = self._error_result(f"Worker error: {msg['message']}")
                     self._add_history(code, result.error, 0)
@@ -744,6 +757,43 @@ class SessionProxy:
         """Create RunResult with an error message."""
         return RunResult(result=None, output="", error=error, duration_ms=0)
 
+    def _handle_viewer_op(self, msg: dict) -> RunResult:
+        """Handle forwarded viewer operation by routing to viewer worker."""
+        global _viewer_registry
+
+        if _viewer_registry is None:
+            return self._error_result("Viewer registry not initialized")
+
+        viewer_id = msg.get("viewer_id")
+        op = msg.get("op")
+        args = msg.get("args", {})
+
+        try:
+            # Get viewer worker proxy
+            viewer = _viewer_registry.get_viewer(viewer_id)
+            if viewer is None:
+                return self._error_result(f"Viewer {viewer_id} not found")
+
+            # Send operation to viewer worker via pipe
+            viewer_pipe = viewer.get_pipe()
+            viewer_pipe.send({
+                "type": "viewer_op",
+                "op": op,
+                "args": args,
+            })
+
+            # Wait for response
+            if viewer_pipe.poll(timeout=30):  # 30 second timeout
+                response = viewer_pipe.recv()
+                if response.get("type") == "error":
+                    return self._error_result(response.get("message", "Unknown error"))
+                return RunResult(result={"result": response.get("result")}, output="", error=None, duration_ms=0)
+            else:
+                return self._error_result("Viewer operation timed out")
+
+        except Exception as e:
+            return self._error_result(f"Viewer operation failed: {e}")
+
     def _add_history(self, code: str, error: str | None, duration_ms: int) -> None:
         """Add execution to history."""
         entry = HistoryEntry(code=code, error=error, duration_ms=duration_ms)
@@ -751,36 +801,3 @@ class SessionProxy:
         max_h = self.config.limits.history_max
         if len(self.history) > max_h:
             self.history = self.history[-max_h:]
-
-    def save_plot(self, figure_var: str) -> dict[str, str | None]:
-        """Save a plotly Figure to HTML and PNG, return filenames."""
-        if self._closed:
-            raise RuntimeError("Session is closed. Call open_session() to create a new one.")
-        if self._crashed:
-            raise RuntimeError("Session has crashed. Call open_session() to create a new one.")
-
-        try:
-            self._parent_conn.send({
-                "type": "save_plot",
-                "figure_var": figure_var,
-            })
-
-            if self._parent_conn.poll(timeout=30):
-                msg = self._parent_conn.recv()
-
-                if msg["type"] == "save_plot_result":
-                    return {
-                        "html_filename": msg["html_filename"],
-                        "png_filename": msg.get("png_filename"),
-                    }
-                elif msg["type"] == "error":
-                    raise RuntimeError(msg["message"])
-                else:
-                    raise RuntimeError(f"Unknown response type: {msg['type']}")
-
-            else:
-                raise RuntimeError("save_plot timed out")
-
-        except (BrokenPipeError, ConnectionError, EOFError) as e:
-            self._detect_crash()
-            raise RuntimeError("Session crashed while saving plot") from e
