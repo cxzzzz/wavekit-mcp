@@ -80,9 +80,8 @@ WAVEKIT_MCP_RUN_TIMEOUT_SEC=300 wavekit-mcp
 | `run(sid, code)` | 执行 Python 代码 |
 | `get_history(sid, n)` | 查看执行历史 |
 | `get_api_docs(topic)` | 查看 wavekit API 文档 |
-| `save_plot(sid, figure_var)` | 保存图表为 HTML/PNG |
 
-每个会话预置：`open_reader()`、`np`、`Pattern`、`MatchStatus`
+每个会话预置：`open_reader()`、`VcdReader`、`FsdbReader`、`np`、`Pattern`、`MatchStatus`、`Viewer`、`GroupItem`、`DividerItem`、`MarkerItem`
 
 ## 示例
 
@@ -120,11 +119,21 @@ print(f"transactions={len(valid.duration.value)}  mean={np.mean(valid.duration.v
 ## 安全限制
 
 代码运行在 [RestrictedPython](https://restrictedpython.readthedocs.io/) 环境下：
-- `import` 被禁用
+- `import` 默认被禁用
 - `__class__`、`__bases__` 等属性访问被禁用
 - 文件 I/O 默认关闭
 
 > 注意：设计目的是防止误操作，不能完全隔离恶意代码。
+
+### 放宽限制
+
+如需允许特定导入，在配置中添加：
+
+```toml
+[sandbox]
+allowed_imports = ["plotly.*", "matplotlib.*"]  # glob 模式匹配
+# allowed_imports = ["*"]  # 允许所有导入
+```
 
 ## 更多
 

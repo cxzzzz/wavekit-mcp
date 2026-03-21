@@ -82,9 +82,8 @@ WAVEKIT_MCP_RUN_TIMEOUT_SEC=300 wavekit-mcp
 | `run(sid, code)` | Execute Python; returns `{result, output, error, duration_ms}` |
 | `get_history(sid, n)` | Last N execution records |
 | `get_api_docs(topic)` | wavekit API reference |
-| `save_plot(sid, figure_var)` | Save plotly Figure to HTML/PNG; returns path (stdio) or URL (http) |
 
-Every session has these pre-injected: `open_reader(path)`, `np`, `Pattern`, `MatchStatus`.
+Every session has these pre-injected: `open_reader(path)`, `VcdReader`, `FsdbReader`, `np`, `Pattern`, `MatchStatus`, `Viewer`, `GroupItem`, `DividerItem`, `MarkerItem`.
 
 `run()` returns structured summaries for large objects rather than raw data — the Waveform, ndarray, and MatchResult objects stay in the session namespace for further processing.
 
@@ -123,7 +122,17 @@ print(f"transactions={len(valid.duration.value)}  mean={np.mean(valid.duration.v
 
 ## Security
 
-Code runs under [RestrictedPython](https://restrictedpython.readthedocs.io/): `import` is blocked, `__class__` / `__bases__` access is blocked, and file I/O is disabled by default. Designed to prevent accidental operations, not to sandbox fully untrusted code.
+Code runs under [RestrictedPython](https://restrictedpython.readthedocs.io/): `import` is blocked by default, `__class__` / `__bases__` access is blocked, and file I/O is disabled by default. Designed to prevent accidental operations, not to sandbox fully untrusted code.
+
+### Relaxing restrictions
+
+To allow specific imports, add to your config:
+
+```toml
+[sandbox]
+allowed_imports = ["plotly.*", "matplotlib.*"]  # glob patterns
+# allowed_imports = ["*"]  # allow all imports
+```
 
 ## More
 

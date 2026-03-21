@@ -9,7 +9,7 @@ Follow the patterns below exactly. Do NOT use `import wavekit` or `with VcdReade
 
 ```python
 # All pre-injected — no imports needed:
-# VcdReader(path), FsdbReader(path), open_reader(path), np, Pattern, MatchStatus
+# VcdReader(path), FsdbReader(path), open_reader(path), np, Pattern, MatchStatus, Viewer
 ```
 
 Always: open_session() → run() × N → close_session()
@@ -20,6 +20,64 @@ sid = open_session(description="analyzing ADD_basic waveform")
 ```
 
 Use `list_sessions()` to see all active sessions with their descriptions and creation times.
+
+---
+
+## Waveform Viewer
+
+The `Viewer` class provides waveform visualization via Surfer. It automatically falls back from GUI mode (requires display) to server mode (browser access).
+
+```python
+# Load waveform data
+wf = r.load_waveform("tb.clk", clock="tb.clk")
+data = r.load_waveform("tb.data[7:0]", clock="tb.clk")
+
+# Create viewer and add waveforms
+viewer = Viewer()
+viewer.top_group.append(wf)
+viewer.top_group.append(data)
+viewer.push_state()
+
+# Print URL for user
+print(f"View at: {viewer.url}")
+# GUI mode: "gui://surfer" (local window)
+# Server mode: "http://localhost:PORT" (browser)
+
+# Close when done (or session close will clean up)
+viewer.close()
+```
+
+### Viewer features
+
+| Feature | GUI mode | Server mode |
+|---------|----------|-------------|
+| Programmatic control (WCP) | ✓ | ✗ |
+| Add/remove signals | ✓ | ✗ |
+| Set cursor/viewport | ✓ | ✗ |
+| Browser access | ✗ | ✓ |
+| VCD reload on push_state | ✓ | ✓ |
+
+### Display items
+
+```python
+from wavekit_mcp.viewer import GroupItem, DividerItem, MarkerItem, WaveformItem
+
+# Group signals together
+group = GroupItem(name="FIFO")
+group.append(wf_ptr)
+group.append(wf_data)
+viewer.top_group.append(group)
+
+# Add visual divider
+viewer.top_group.append(DividerItem())
+
+# Add markers
+viewer.markers.append(MarkerItem(time=1000, name="start"))
+viewer.markers.append(MarkerItem(time=5000, name="end"))
+viewer.push_state()
+```
+
+**IMPORTANT**: Keep the session open while the user is viewing. Closing the session closes the viewer.
 
 ---
 
