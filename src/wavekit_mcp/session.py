@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import fnmatch
 import io
 import logging
 import multiprocessing
@@ -176,6 +177,45 @@ _BASE_GUARDS: dict[str, Any] = {
 }
 
 
+def _make_guarded_import(allowed_patterns: list[str]):
+    """Create a guarded __import__ that checks against allowed patterns.
+
+    Args:
+        allowed_patterns: List of glob patterns (e.g., ["plotly.*", "matplotlib"])
+
+    Returns:
+        A guarded __import__ function
+    """
+    real_import = _builtins.__import__
+
+    def guarded_import(
+        name: str,
+        globals=None,
+        locals=None,
+        fromlist=(),
+        level=0,
+    ):
+        # Check if module name matches any allowed pattern
+        for pattern in allowed_patterns:
+            # Handle both exact match and glob pattern
+            if fnmatch.fnmatch(name, pattern):
+                return real_import(name, globals, locals, fromlist, level)
+            # Special case: pattern "foo" should match "foo.bar" (submodule)
+            if pattern != "*" and name.startswith(pattern.rstrip(".*") + "."):
+                return real_import(name, globals, locals, fromlist, level)
+            # Special case: pattern "foo.*" should match "foo"
+            if pattern.endswith(".*") and name == pattern[:-2]:
+                return real_import(name, globals, locals, fromlist, level)
+
+        raise ImportError(
+            f"Import of '{name}' is not allowed. "
+            f"Allowed patterns: {allowed_patterns}. "
+            f"Add to sandbox.allowed_imports in config to allow."
+        )
+
+    return guarded_import
+
+
 # ── Session ───────────────────────────────────────────────────────────────────
 
 class Session:
@@ -219,6 +259,12 @@ class Session:
 
         if self.config.file_access.read_enabled or self.config.file_access.write_enabled:
             ns["open"] = self._make_safe_open()
+
+        # Add guarded import if allowed_imports is configured
+        allowed_imports = self.config.sandbox.allowed_imports
+        if allowed_imports:
+            ns["__builtins__"] = dict(ns["__builtins__"])
+            ns["__builtins__"]["__import__"] = _make_guarded_import(allowed_imports)
 
         self.namespace = ns
 

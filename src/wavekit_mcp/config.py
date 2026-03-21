@@ -46,6 +46,13 @@ transport = "stdio"  # stdio | streamable-http
 host = "0.0.0.0"
 port = 8080
 # plots_dir = ""  # empty = auto-create temp directory
+
+[sandbox]
+# Glob patterns for modules that can be imported beyond the built-in allowlist.
+# Examples:
+#   allowed_imports = ["plotly", "matplotlib.*"]  # allow plotly and all matplotlib submodules
+#   allowed_imports = ["*"]  # allow all imports (disable import restrictions)
+# allowed_imports = []
 """
         config_file.write_text(default_config)
 
@@ -87,11 +94,20 @@ class ServerConfig:
 
 
 @dataclass
+class SandboxConfig:
+    """Configure RestrictedPython sandbox restrictions."""
+    # Glob patterns for modules that can be imported (e.g., ["plotly.*", "matplotlib.*"])
+    # Empty list = only built-in modules allowed (default)
+    allowed_imports: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Config:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     file_access: FileAccessConfig = field(default_factory=FileAccessConfig)
     log: LogConfig = field(default_factory=LogConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    sandbox: SandboxConfig = field(default_factory=SandboxConfig)
 
     @classmethod
     def load(cls, config_path: str | None = None) -> Config:
@@ -120,6 +136,7 @@ class Config:
         file_access = _build_dataclass(FileAccessConfig, data.get("file_access", {}))
         log = _build_dataclass(LogConfig, data.get("log", {}))
         server = _build_dataclass(ServerConfig, data.get("server", {}))
+        sandbox = _build_dataclass(SandboxConfig, data.get("sandbox", {}))
 
         # Environment variable overrides: WAVEKIT_MCP_<FIELD_NAME_UPPER>
         # Only scalar fields (int, bool) are supported via env vars.
@@ -138,7 +155,7 @@ class Config:
             if env_val is not None:
                 setattr(server, fname, _coerce(ftype, env_val))
 
-        return cls(limits=limits, file_access=file_access, log=log, server=server)
+        return cls(limits=limits, file_access=file_access, log=log, server=server, sandbox=sandbox)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
