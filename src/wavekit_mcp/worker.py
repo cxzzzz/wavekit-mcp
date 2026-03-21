@@ -53,29 +53,6 @@ def worker_main(conn: Any, config: Any, stderr_log_path: str | None = None) -> N
 
     session = Session("worker", config)
 
-    # Inject get_viewer function with IPC access
-    from .viewer.proxy import ViewerProxy
-
-    def get_viewer(viewer_id: str) -> ViewerProxy:
-        """
-        Get a ViewerProxy for the specified viewer.
-
-        Args:
-            viewer_id: The viewer ID (from open_viewer() MCP tool)
-
-        Returns:
-            ViewerProxy instance for communicating with the viewer.
-        """
-        if viewer_id is None:
-            raise ValueError(
-                "viewer_id is required. "
-                "Call open_viewer() first and pass the returned viewer_id."
-            )
-        # Create a proxy that uses the worker's IPC connection
-        return ViewerProxy(viewer_id, conn)
-
-    session.namespace["get_viewer"] = get_viewer
-
     try:
         while True:
             try:
@@ -101,16 +78,6 @@ def worker_main(conn: Any, config: Any, stderr_log_path: str | None = None) -> N
                 session.close()
                 conn.send({"type": "ack"})
                 break
-
-            elif msg_type == "viewer_op":
-                # Forward viewer operations to main process
-                # Main process routes to appropriate viewer worker
-                conn.send({
-                    "type": "viewer_op_forward",
-                    "viewer_id": msg.get("viewer_id"),
-                    "op": msg.get("op"),
-                    "args": msg.get("args"),
-                })
 
             else:
                 conn.send({

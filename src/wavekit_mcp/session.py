@@ -31,16 +31,6 @@ from .serializer import serialize_result
 from .worker import worker_main
 
 
-# Global viewer registry reference (set by server.py)
-_viewer_registry = None
-
-
-def set_viewer_registry(registry) -> None:
-    """Set the global viewer registry (called by server.py on startup)."""
-    global _viewer_registry
-    _viewer_registry = registry
-
-
 # ── RestrictedPython print bridge ─────────────────────────────────────────────
 
 class _StdoutPrinter:
@@ -193,20 +183,23 @@ class Session:
         self.session_id = session_id
         self.config = config
         self.managed_readers: list[Any] = []
+        self.managed_viewers: list[Any] = []
         self.history: list[HistoryEntry] = []
         self.namespace: dict[str, Any] = {}
+        self._log = logging.getLogger("wavekit_mcp.session")
         self._reset_namespace()
 
     # ── namespace management ──────────────────────────────────────────────────
 
     def _reset_namespace(self) -> None:
-        """Close open readers, clear user variables, re-inject base objects."""
+        """Close open readers/viewers, clear user variables, re-inject base objects."""
         self._close_readers()
+        self._close_viewers()
 
         import wavekit
 
         # Import viewer components for injection
-        from .viewer.items import GroupItem, DividerItem, MarkerItem
+        from .viewer import Viewer, GroupItem, DividerItem, MarkerItem
 
         ns: dict[str, Any] = {
             **_BASE_GUARDS,
@@ -216,11 +209,12 @@ class Session:
             "open_reader": self._make_open_reader(),
             "VcdReader": self._make_reader_class(wavekit.VcdReader),
             "FsdbReader": self._make_reader_class(wavekit.FsdbReader),
-            # Viewer helpers
+            # Viewer class - user creates instance with Viewer()
+            "Viewer": self._make_viewer_class(Viewer),
+            # Item types for building display hierarchy
             "GroupItem": GroupItem,
             "DividerItem": DividerItem,
             "MarkerItem": MarkerItem,
-            # get_viewer is injected by worker_main with IPC access
         }
 
         if self.config.file_access.read_enabled or self.config.file_access.write_enabled:
@@ -228,16 +222,24 @@ class Session:
 
         self.namespace = ns
 
-    def _close_readers(self) -> None:
-        for r in self.managed_readers:
+    def _close_managed(self, items: list, name: str) -> None:
+        """Close a list of managed resources."""
+        for item in items:
             try:
-                r.close()
-            except Exception:
-                pass
-        self.managed_readers = []
+                item.close()
+            except Exception as e:
+                self._log.warning("Error closing %s: %s", name, e)
+        items.clear()
+
+    def _close_readers(self) -> None:
+        self._close_managed(self.managed_readers, "reader")
+
+    def _close_viewers(self) -> None:
+        self._close_managed(self.managed_viewers, "viewer")
 
     def close(self) -> None:
         self._close_readers()
+        self._close_viewers()
         self.namespace = {}
 
     # ── injected helpers ──────────────────────────────────────────────────────
@@ -280,6 +282,19 @@ class Session:
         _ManagedReader.__name__ = cls.__name__
         _ManagedReader.__qualname__ = cls.__qualname__
         return _ManagedReader
+
+    def _make_viewer_class(self, cls):
+        """Return a wrapper that instantiates Viewer and registers it for auto-close."""
+        managed_viewers = self.managed_viewers
+
+        class _ManagedViewer(cls):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                managed_viewers.append(self)
+
+        _ManagedViewer.__name__ = cls.__name__
+        _ManagedViewer.__qualname__ = cls.__qualname__
+        return _ManagedViewer
 
     def _make_safe_open(self):
         cfg = self.config.file_access
@@ -620,10 +635,6 @@ class SessionProxy:
                     result = msg["data"]  # RunResult object directly
                     self._add_history(code, result.error, result.duration_ms)
                     return result
-                elif msg["type"] == "viewer_op_forward":
-                    # Forward viewer operation to main process and return result
-                    result = self._handle_viewer_op(msg)
-                    return result
                 elif msg["type"] == "error":
                     result = self._error_result(f"Worker error: {msg['message']}")
                     self._add_history(code, result.error, 0)
@@ -756,43 +767,6 @@ class SessionProxy:
     def _error_result(self, error: str) -> RunResult:
         """Create RunResult with an error message."""
         return RunResult(result=None, output="", error=error, duration_ms=0)
-
-    def _handle_viewer_op(self, msg: dict) -> RunResult:
-        """Handle forwarded viewer operation by routing to viewer worker."""
-        global _viewer_registry
-
-        if _viewer_registry is None:
-            return self._error_result("Viewer registry not initialized")
-
-        viewer_id = msg.get("viewer_id")
-        op = msg.get("op")
-        args = msg.get("args", {})
-
-        try:
-            # Get viewer worker proxy
-            viewer = _viewer_registry.get_viewer(viewer_id)
-            if viewer is None:
-                return self._error_result(f"Viewer {viewer_id} not found")
-
-            # Send operation to viewer worker via pipe
-            viewer_pipe = viewer.get_pipe()
-            viewer_pipe.send({
-                "type": "viewer_op",
-                "op": op,
-                "args": args,
-            })
-
-            # Wait for response
-            if viewer_pipe.poll(timeout=30):  # 30 second timeout
-                response = viewer_pipe.recv()
-                if response.get("type") == "error":
-                    return self._error_result(response.get("message", "Unknown error"))
-                return RunResult(result={"result": response.get("result")}, output="", error=None, duration_ms=0)
-            else:
-                return self._error_result("Viewer operation timed out")
-
-        except Exception as e:
-            return self._error_result(f"Viewer operation failed: {e}")
 
     def _add_history(self, code: str, error: str | None, duration_ms: int) -> None:
         """Add execution to history."""

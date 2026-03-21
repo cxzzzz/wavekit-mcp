@@ -1,12 +1,11 @@
-"""Integration tests for ViewerInstance (requires Surfer binary).
+"""Integration tests for Viewer (requires Surfer binary).
 
 Run with: pytest -m integration tests/test_instance.py
 
-These tests require the 'surfer' binary to be installed and available in PATH.
+These tests require the 'surfer' or 'surver' binary to be installed and available in PATH.
 """
 
 import pytest
-import asyncio
 import shutil
 import tempfile
 from pathlib import Path
@@ -14,6 +13,7 @@ from pathlib import Path
 
 # Check if Surfer is available
 SURFER_AVAILABLE = shutil.which("surfer") is not None
+SURVER_AVAILABLE = shutil.which("surver") is not None
 
 
 @pytest.fixture
@@ -21,78 +21,108 @@ def viewer_config():
     """Create test viewer configuration."""
     from wavekit_mcp.viewer import ViewerConfig
 
-    return ViewerConfig(
-        headless=True,
-        wcp_port=0,  # Auto-assign
-        http_port=0,  # Auto-assign
-    )
+    return ViewerConfig()
 
 
 @pytest.fixture
-async def viewer_instance(viewer_config):
-    """Create and start a ViewerInstance for testing."""
-    from wavekit_mcp.viewer import ViewerInstance
+def viewer(viewer_config):
+    """Create and start a Viewer for testing."""
+    from wavekit_mcp.viewer import Viewer
 
-    viewer = ViewerInstance("test_viewer", viewer_config)
-
+    v = Viewer(viewer_config)
     try:
-        await viewer.start()
-        yield viewer
+        v.start()
+        yield v
     finally:
-        await viewer.stop()
+        v.close()
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not SURFER_AVAILABLE, reason="Surfer binary not found")
-class TestViewerInstance:
-    """Integration tests for ViewerInstance."""
+@pytest.mark.skipif(not (SURFER_AVAILABLE or SURVER_AVAILABLE), reason="Neither surfer nor surver binary found")
+class TestViewer:
+    """Integration tests for Viewer."""
 
-    @pytest.mark.asyncio
-    async def test_start_stop(self, viewer_config):
+    def test_start_stop(self, viewer_config):
         """Test starting and stopping Surfer."""
-        from wavekit_mcp.viewer import ViewerInstance
+        from wavekit_mcp.viewer import Viewer
 
-        viewer = ViewerInstance("test_start_stop", viewer_config)
+        viewer = Viewer(viewer_config)
 
-        url = await viewer.start()
-        assert url.startswith("http://localhost:")
+        url = viewer.start()
+        # URL can be gui://surfer (GUI mode) or http://localhost:PORT (server mode)
+        assert url.startswith("gui://") or url.startswith("http://localhost:")
         assert viewer.is_running
+        assert viewer.mode in ("gui", "server")
 
-        await viewer.stop()
+        viewer.close()
         assert not viewer.is_running
+        assert viewer.mode is None
 
-    @pytest.mark.asyncio
-    async def test_url_property(self, viewer_instance):
+    def test_url_property(self, viewer):
         """Test URL property."""
-        url = viewer_instance.url
-        assert url.startswith("http://localhost:")
+        url = viewer.url
+        assert url.startswith("gui://") or url.startswith("http://localhost:")
 
-    @pytest.mark.asyncio
-    async def test_get_item_list_empty(self, viewer_instance):
+    def test_mode_property(self, viewer):
+        """Test mode property."""
+        assert viewer.mode in ("gui", "server")
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not SURFER_AVAILABLE, reason="Surfer binary not found (GUI mode required)")
+class TestViewerGUI:
+    """Integration tests for GUI mode (requires display)."""
+
+    @pytest.fixture
+    def gui_viewer(self, viewer_config):
+        """Create a GUI mode viewer (skip if not available)."""
+        from wavekit_mcp.viewer import Viewer
+
+        v = Viewer(viewer_config)
+        try:
+            v.start()
+            if v.mode != "gui":
+                pytest.skip("GUI mode not available (no display)")
+            yield v
+        finally:
+            v.close()
+
+    def test_get_item_list_empty(self, gui_viewer):
         """Test get_item_list on empty viewer."""
-        ids = await viewer_instance._wcp.get_item_list()
+        ids = gui_viewer._loop.run_until_complete(gui_viewer._wcp.get_item_list())
         assert ids == []
 
-    @pytest.mark.asyncio
-    async def test_clear(self, viewer_instance):
+    def test_clear(self, gui_viewer):
         """Test clear command."""
-        await viewer_instance._wcp.clear()  # Should not raise
+        gui_viewer._loop.run_until_complete(gui_viewer._wcp.clear())  # Should not raise
 
-    @pytest.mark.asyncio
-    async def test_set_cursor(self, viewer_instance):
+    def test_set_cursor(self, gui_viewer):
         """Test set_cursor command."""
-        await viewer_instance.set_cursor(1000)  # Should not raise
+        gui_viewer.set_cursor(1000)  # Should not raise
 
-    @pytest.mark.asyncio
-    async def test_zoom_to_fit(self, viewer_instance):
+    def test_zoom_to_fit(self, gui_viewer):
         """Test zoom_to_fit command."""
-        await viewer_instance.zoom_to_fit()  # Should not raise
+        gui_viewer.zoom_to_fit()  # Should not raise
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not SURFER_AVAILABLE, reason="Surfer binary not found")
-class TestViewerInstanceWithWaveforms:
-    """Integration tests requiring waveform data."""
+@pytest.mark.skipif(not SURFER_AVAILABLE, reason="Surfer binary not found (GUI mode required)")
+class TestViewerWithWaveforms:
+    """Integration tests requiring waveform data (GUI mode only)."""
+
+    @pytest.fixture
+    def gui_viewer_with_waveforms(self, viewer_config):
+        """Create a GUI mode viewer."""
+        from wavekit_mcp.viewer import Viewer
+
+        v = Viewer(viewer_config)
+        try:
+            v.start()
+            if v.mode != "gui":
+                pytest.skip("GUI mode not available (no display)")
+            yield v
+        finally:
+            v.close()
 
     @pytest.fixture
     def sample_vcd(self, tmp_path):
@@ -122,113 +152,75 @@ $var wire 1 a 1 $end
 """)
         return str(vcd_path)
 
-    @pytest.mark.asyncio
-    async def test_load_vcd(self, viewer_instance, sample_vcd):
+    def test_load_vcd(self, gui_viewer_with_waveforms, sample_vcd):
         """Test loading a VCD file."""
-        result = await viewer_instance._wcp.load(sample_vcd)
+        result = gui_viewer_with_waveforms._loop.run_until_complete(gui_viewer_with_waveforms._wcp.load(sample_vcd))
         # Should have some response
         assert result is not None
 
-    @pytest.mark.asyncio
-    async def test_add_variables(self, viewer_instance, sample_vcd):
+    def test_add_variables(self, gui_viewer_with_waveforms, sample_vcd):
         """Test adding variables after loading VCD."""
-        await viewer_instance._wcp.load(sample_vcd)
+        gui_viewer_with_waveforms._loop.run_until_complete(gui_viewer_with_waveforms._wcp.load(sample_vcd))
 
-        ids = await viewer_instance._wcp.add_variables(["top.clk", "top.data[7:0]"])
+        ids = gui_viewer_with_waveforms._loop.run_until_complete(
+            gui_viewer_with_waveforms._wcp.add_variables(["top.clk", "top.data[7:0]"])
+        )
         assert len(ids) == 2
 
         # Verify items are added
-        item_list = await viewer_instance._wcp.get_item_list()
+        item_list = gui_viewer_with_waveforms._loop.run_until_complete(gui_viewer_with_waveforms._wcp.get_item_list())
         assert len(item_list) == 2
 
-    @pytest.mark.asyncio
-    async def test_pull_state(self, viewer_instance, sample_vcd):
+    def test_pull_state(self, gui_viewer_with_waveforms, sample_vcd):
         """Test pull_state after loading and adding variables."""
-        await viewer_instance._wcp.load(sample_vcd)
-        await viewer_instance._wcp.add_variables(["top.clk"])
+        gui_viewer_with_waveforms._loop.run_until_complete(gui_viewer_with_waveforms._wcp.load(sample_vcd))
+        gui_viewer_with_waveforms._loop.run_until_complete(gui_viewer_with_waveforms._wcp.add_variables(["top.clk"]))
 
-        state = await viewer_instance.pull_state()
+        gui_viewer_with_waveforms.pull_state()
 
-        assert "top_group" in state
-        assert "markers" in state
+        # pull_state updates self.top_group in place
+        assert gui_viewer_with_waveforms.top_group is not None
         # Should have at least one item
-        assert state["top_group"].children or len(list(state["top_group"].walk())) >= 1
+        assert gui_viewer_with_waveforms.top_group.children or len(list(gui_viewer_with_waveforms.top_group.walk())) >= 1
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not SURFER_AVAILABLE, reason="Surfer binary not found")
-class TestViewerRegistry:
-    """Integration tests for ViewerRegistry with viewer workers."""
+@pytest.mark.skipif(not SURVER_AVAILABLE, reason="Surver binary not found")
+class TestViewerServer:
+    """Integration tests for server mode."""
 
     @pytest.fixture
-    def config(self):
-        """Create minimal config for testing."""
-        from wavekit_mcp.config import Config
+    def server_viewer(self, viewer_config):
+        """Create a server mode viewer."""
+        from wavekit_mcp.viewer import Viewer
 
-        return Config()  # Use defaults
-
-    @pytest.mark.asyncio
-    async def test_create_viewer(self, config):
-        """Test creating a viewer through registry."""
-        from wavekit_mcp.viewer import ViewerRegistry
-
-        registry = ViewerRegistry(config)
-        viewer_id, viewer = await registry.create_viewer()
-
+        v = Viewer(viewer_config)
         try:
-            assert viewer.is_running
-            assert viewer.url.startswith("http://")
+            v.start()
+            if v.mode != "server":
+                pytest.skip("Server mode not available (GUI mode was used)")
+            yield v
         finally:
-            await registry.close_all()
+            v.close()
 
-    @pytest.mark.asyncio
-    async def test_list_viewers(self, config):
-        """Test listing viewers."""
-        from wavekit_mcp.viewer import ViewerRegistry
+    def test_server_mode_url(self, server_viewer):
+        """Test that server mode returns HTTP URL."""
+        assert server_viewer.url.startswith("http://localhost:")
 
-        registry = ViewerRegistry(config)
+    def test_push_state_empty(self, server_viewer):
+        """Test push_state with empty content in server mode."""
+        # Should not raise
+        server_viewer.push_state()
 
-        try:
-            assert registry.list_viewers() == []
+    def test_pull_state_not_supported(self, server_viewer):
+        """Test that pull_state raises error in server mode."""
+        with pytest.raises(RuntimeError, match="not supported in server mode"):
+            server_viewer.pull_state()
 
-            vid1, _ = await registry.create_viewer()
-            vid2, _ = await registry.create_viewer()
+    def test_focus_not_supported(self, server_viewer):
+        """Test that focus raises error in server mode."""
+        from wavekit_mcp.viewer import WaveformItem
 
-            viewers = registry.list_viewers()
-            assert len(viewers) == 2
-            assert vid1 in viewers
-            assert vid2 in viewers
-
-        finally:
-            await registry.close_all()
-
-    @pytest.mark.asyncio
-    async def test_close_viewer(self, config):
-        """Test closing a viewer."""
-        from wavekit_mcp.viewer import ViewerRegistry
-
-        registry = ViewerRegistry(config)
-        viewer_id, viewer = await registry.create_viewer()
-
-        assert viewer.is_running
-
-        await registry.close_viewer(viewer_id)
-
-        assert not viewer.is_running
-        assert viewer_id not in registry.list_viewers()
-
-    @pytest.mark.asyncio
-    async def test_close_all(self, config):
-        """Test closing all viewers."""
-        from wavekit_mcp.viewer import ViewerRegistry
-
-        registry = ViewerRegistry(config)
-
-        await registry.create_viewer()
-        await registry.create_viewer()
-
-        assert len(registry.list_viewers()) == 2
-
-        await registry.close_all()
-
-        assert len(registry.list_viewers()) == 0
+        item = WaveformItem(item_id="test", _waveform=None)
+        with pytest.raises(RuntimeError, match="not supported in server mode"):
+            server_viewer.focus(item)

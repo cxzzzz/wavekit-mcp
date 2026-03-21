@@ -9,8 +9,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from .config import Config
-from .session import SessionManager, set_viewer_registry
-from .viewer import ViewerRegistry
+from .session import SessionManager
 
 # Get version from package metadata
 try:
@@ -21,7 +20,6 @@ except PackageNotFoundError:
 mcp = FastMCP("wavekit-mcp", version=__version__)
 
 _manager: SessionManager | None = None
-_viewer_registry: ViewerRegistry | None = None
 
 
 def _get_manager() -> SessionManager:
@@ -49,6 +47,10 @@ def open_session(description: str | None = None) -> str:
       np                 — numpy
       Pattern            — wavekit.Pattern  (temporal pattern matching DSL)
       MatchStatus        — wavekit.MatchStatus
+      Viewer             — class for waveform visualization (call Viewer() to create instance)
+      GroupItem          — display group item for viewer
+      DividerItem        — display divider item for viewer
+      MarkerItem         — marker item for viewer
       open(path, mode)   — standard file I/O (only if enabled in server config,
                            restricted to configured allowed paths)
 
@@ -66,7 +68,15 @@ def open_session(description: str | None = None) -> str:
 
 @mcp.tool()
 def close_session(session_id: str) -> str:
-    """Close a session and release all resources (open readers, memory)."""
+    """Close a session and release all resources (open readers, viewer, memory).
+
+    IMPORTANT: If the session has a viewer open, closing the session will also
+    close the viewer. Do not close sessions if the user may still be viewing
+    waveforms. Wait for explicit user confirmation before closing.
+
+    Args:
+        session_id: The session ID to close
+    """
     _get_manager().close_session(session_id)
     return f"Session '{session_id}' closed."
 
@@ -87,7 +97,7 @@ def list_sessions() -> list[dict]:
 def reset_session(session_id: str) -> str:
     """Reset a session: close open readers and clear all user-defined variables.
 
-    Pre-injected objects (open_reader, np, Pattern, MatchStatus) are restored.
+    Pre-injected objects (open_reader, np, Pattern, MatchStatus, Viewer, etc.) are restored.
     Use this to start a fresh analysis without creating a new session.
     """
     _get_manager().reset_session(session_id)
@@ -108,6 +118,14 @@ def run(session_id: str, code: str) -> dict[str, Any]:
         # or use open_reader() for auto-detection by extension
         r3 = open_reader("/path/to/sim.vcd")    # .vcd → VcdReader, other → FsdbReader
         # multiple readers allowed; all auto-closed on reset/close
+
+    VIEWER:
+        # Create a viewer instance (Surfer process starts on Viewer())
+        viewer = Viewer()
+        viewer.top_group.append(wf)   # add waveform to display
+        viewer.push_state()           # push changes to Surfer
+        print(viewer.url)             # get URL to view in browser
+        viewer.close()                # close when done (or session close will clean up)
 
     MULTI-CALL WORKFLOW:
         # call 1 — load
@@ -202,87 +220,6 @@ def get_api_docs(topic: str = "") -> str:
     return _pydoc.render_doc(topic_map[topic], renderer=_pydoc.plaintext)
 
 
-@mcp.tool()
-def open_viewer() -> dict:
-    """Create a new Viewer instance for waveform visualization.
-
-    Returns a viewer_id that can be used in session code to control
-    a Surfer waveform viewer.
-
-    Returns:
-        {
-            "viewer_id": "abc123",
-            "url": "http://localhost:12345"
-        }
-
-    Usage in session:
-        viewer_id = open_viewer()["viewer_id"]
-        run(sid, f'''
-            # Get viewer proxy (viewer_id is bound in session)
-            viewer = get_viewer("{viewer_id}")
-
-            # Load waveform data
-            wf = r.load_waveform("top.clk", clock="top.clk")
-
-            # Pull current state
-            viewer.pull_state()
-
-            # Add waveforms to display
-            viewer.top_group.append(wf)
-
-            # Push to viewer
-            viewer.push_state()
-
-            print(f"View at: {viewer.url}")
-        ''')
-    """
-    global _viewer_registry
-    if _viewer_registry is None:
-        raise RuntimeError("Viewer registry not initialized")
-
-    import asyncio
-    viewer_id, viewer = asyncio.run(_viewer_registry.create_viewer())
-
-    return {
-        "viewer_id": viewer_id,
-        "url": viewer.url,
-    }
-
-
-@mcp.tool()
-def close_viewer(viewer_id: str) -> str:
-    """Close a viewer and release resources (Surfer process).
-
-    Args:
-        viewer_id: The viewer ID returned by open_viewer()
-    """
-    global _viewer_registry
-    if _viewer_registry is None:
-        raise RuntimeError("Viewer registry not initialized")
-
-    import asyncio
-    asyncio.run(_viewer_registry.close_viewer(viewer_id))
-    return f"Viewer '{viewer_id}' closed."
-
-
-@mcp.tool()
-def list_viewers() -> list[dict]:
-    """List all active viewers.
-
-    Returns a list with each entry containing:
-        viewer_id   — the viewer identifier
-        url         — the HTTP URL for accessing Surfer
-    """
-    global _viewer_registry
-    if _viewer_registry is None:
-        return []
-
-    return [
-        {"viewer_id": vid, "url": _viewer_registry.get_viewer(vid).url}
-        for vid in _viewer_registry.list_viewers()
-    ]
-
-
 # ── resources ─────────────────────────────────────────────────────────────────
 
 @mcp.resource("wavekit://guide")
@@ -304,6 +241,9 @@ Always follow this structure:
 
 Use reset_session(sid) to clear variables without reopening files.
 
+**IMPORTANT**: If you use the viewer, keep the session open until the user
+confirms they are done viewing. Closing the session will close the viewer.
+
 ---
 
 ## Opening Files
@@ -323,6 +263,32 @@ r_act  = VcdReader("/data/actual.vcd")
 
 All readers are auto-closed on reset_session() / close_session().
 Do NOT use `import wavekit` or `with VcdReader(...)` — just assign directly.
+
+---
+
+## Waveform Viewer
+
+The `Viewer` class is pre-injected. Create an instance to start a Surfer viewer:
+
+```python
+# Load waveform data
+wf = r.load_waveform("top.clk", clock="top.clk")
+
+# Create viewer and add waveform
+viewer = Viewer()
+viewer.top_group.append(wf)
+viewer.push_state()
+
+# Print URL for user to view in browser
+print(f"View at: {viewer.url}")
+
+# Close when done (or session close will clean up)
+viewer.close()
+```
+
+**IMPORTANT**: The viewer runs inside the session. Closing the session
+will close the viewer. Keep the session open until the user confirms
+they are done viewing waveforms.
 
 ---
 
@@ -667,11 +633,6 @@ Config file: ~/.config/wavekit-mcp/settings.toml (auto-created on first run)
 
     global _manager
     _manager = SessionManager(config)
-
-    # Initialize viewer registry
-    global _viewer_registry
-    _viewer_registry = ViewerRegistry(config)
-    set_viewer_registry(_viewer_registry)
 
     if srv.transport == "stdio":
         mcp.run(transport="stdio")
