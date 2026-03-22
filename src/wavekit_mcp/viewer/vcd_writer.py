@@ -10,8 +10,6 @@ import re
 import tempfile
 from typing import TYPE_CHECKING
 
-import numpy as np
-
 if TYPE_CHECKING:
     from wavekit import Waveform
 
@@ -79,6 +77,11 @@ def generate_merged_vcd(
     All waveforms are merged into a single VCD file. Signal scopes are
     preserved based on their full_name paths.
 
+    Features:
+    - Does NOT skip duplicate values (unlike pyvcd)
+    - Pads 'x' for signals outside their valid time range
+    - Handles arbitrary waveform lengths
+
     Args:
         waveforms: List of Waveform objects
         output_path: Output file path. If None, creates a temp file.
@@ -100,123 +103,70 @@ def generate_merged_vcd(
     global _name_mapping
     _name_mapping = {}
 
-    # Import pyvcd
-    try:
-        from vcd import VCDWriter
-    except ImportError:
-        raise ImportError(
-            "pyvcd is required for VCD generation. "
-            "Install it with: pip install pyvcd"
-        )
+    from .simple_vcd import VcdWriter
 
-    with open(output_path, 'w') as f:
-        with VCDWriter(f, timescale=timescale) as writer:
-            # Register all signals
-            vars_map = {}  # full_name -> var handle
-            registered_names = {}  # (scope, name) -> full_name (for duplicate detection)
+    # Find global time range
+    min_time = min(wf.time[0] for wf in waveforms if len(wf.time) > 0)
+    max_time = max(wf.time[-1] for wf in waveforms if len(wf.time) > 0)
 
-            for wf in waveforms:
-                # Get signal name - must be set
-                full_name = wf.signal.full_name
-                if full_name is None:
-                    raise ValueError(
-                        f"Waveform has no signal name. "
-                        f"Please explicitly set the signal name."
-                    )
+    registered_names = {}  # (scope, name) -> full_name (for duplicate detection)
 
-                # Parse scope and signal name
-                if '.' in full_name:
-                    parts = full_name.rsplit('.', 1)
-                    scope = parts[0]
-                    name = parts[1]
-                else:
-                    scope = 'top'
-                    name = full_name
+    with VcdWriter(output_path, timescale=timescale) as writer:
+        # Register all signals first
+        for wf in waveforms:
+            # Get signal name - must be set
+            full_name = wf.signal.full_name
+            if full_name is None:
+                raise ValueError(
+                    f"Waveform has no signal name. "
+                    f"Please explicitly set the signal name."
+                )
 
-                # Transform signal name to avoid WCP bit selector interpretation
-                # e.g., data[31:0] -> data_31_0_
-                transformed_name = transform_signal_name(name)
-                wcp_name = f'{scope}.{transformed_name}' if scope != 'top' else transformed_name
-                _name_mapping[full_name] = wcp_name
+            # Parse scope and signal name
+            if '.' in full_name:
+                parts = full_name.rsplit('.', 1)
+                scope = parts[0]
+                name = parts[1]
+            else:
+                scope = ''
+                name = full_name
 
-                # Check for duplicate signal names in the same scope
-                scope_name_key = (scope, transformed_name)
-                if scope_name_key in registered_names:
-                    existing_full_name = registered_names[scope_name_key]
-                    raise ValueError(
-                        f"Duplicate signal name: '{full_name}' conflicts with '{existing_full_name}'. "
-                        f"Signal names must be unique within the same scope."
-                    )
-                registered_names[scope_name_key] = full_name
+            # Transform signal name to avoid WCP bit selector interpretation
+            # e.g., data[31:0] -> data_31_0_
+            transformed_name = transform_signal_name(name)
+            wcp_name = f'{scope}.{transformed_name}' if scope else transformed_name
+            _name_mapping[full_name] = wcp_name
 
-                # Register the variable with transformed name
-                width = wf.width or 1
-                var = writer.register_var(scope, transformed_name, 'wire', size=width)
-                vars_map[full_name] = var
+            # Check for duplicate signal names in the same scope
+            scope_name_key = (scope, transformed_name)
+            if scope_name_key in registered_names:
+                existing_full_name = registered_names[scope_name_key]
+                raise ValueError(
+                    f"Duplicate signal name: '{full_name}' conflicts with '{existing_full_name}'. "
+                    f"Signal names must be unique within the same scope."
+                )
+            registered_names[scope_name_key] = full_name
 
-            # Collect all value changes across all waveforms
-            # Format: (time, var, value)
-            changes = []
+            # Register the variable with transformed name
+            width = wf.width or 1
+            start_time = int(wf.time[0]) if len(wf.time) > 0 else 0
+            end_time = int(wf.time[-1]) if len(wf.time) > 0 else 0
 
-            for wf in waveforms:
-                full_name = wf.signal.full_name
-                if full_name is None or full_name not in vars_map:
-                    continue
+            writer.register_signal(wcp_name, width, start_time, end_time)
 
-                var = vars_map[full_name]
+        # Write all value changes
+        for wf in waveforms:
+            full_name = wf.signal.full_name
+            if full_name is None or full_name not in _name_mapping:
+                continue
 
-                # Use compress() to get only value-change points
-                compressed = wf.compress()
-                if compressed is None:
-                    continue
+            wcp_name = _name_mapping[full_name]
 
-                times = compressed.time
-                values = compressed.value
+            # Write actual values (x padding is handled by finalize)
+            for t, v in zip(wf.time, wf.value):
+                writer.write_value(wcp_name, int(t), int(v))
 
-                for t, v in zip(times, values):
-                    changes.append((int(t), var, v))
-
-            # Find max time across all waveforms to ensure VCD time range is correct
-            max_time = 0
-            for wf in waveforms:
-                if len(wf.time) > 0:
-                    t = int(wf.time[-1])
-                    if t > max_time:
-                        max_time = t
-
-            # Sort changes by time
-            changes.sort(key=lambda x: x[0])
-
-            # Track last value for each variable to write at max_time
-            last_values = {}  # var -> last value
-
-            # Write changes to VCD
-            for t, var, val in changes:
-                # Convert numpy types to Python native types
-                if hasattr(val, 'item'):  # numpy scalar
-                    val = val.item()
-                writer.change(var, t, val)
-                last_values[var] = val
-
-            # Ensure VCD extends to max_time by writing final timestamp and values
-            # This is needed for markers to be visible within the waveform view.
-            #
-            # TODO: This is a workaround for a wavekit bug where compress() drops
-            # the final timestamp if the value doesn't change. Once wavekit is fixed
-            # to preserve the final timestamp in compressed waveforms, this workaround
-            # can be removed. The bug causes markers outside the last value-change time
-            # to not be visible in the waveform view.
-            # We write directly to the file since pyvcd also skips duplicate values.
-            if max_time > 0 and vars_map:
-                # Write timestamp and all current values at max_time
-                writer._ofile.write(f"#{max_time}\n")
-                for full_name, var in vars_map.items():
-                    val = last_values.get(var, 0)
-                    # Format value based on variable type
-                    if hasattr(var, 'format_value'):
-                        val_str = var.format_value(val, False)
-                    else:
-                        val_str = str(val)
-                    writer._ofile.write(f"{val_str}\n")
+        # Finalize
+        writer.finalize(int(min_time), int(max_time))
 
     return output_path
