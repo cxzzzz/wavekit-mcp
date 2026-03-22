@@ -11,7 +11,6 @@ fastmcp = ">=2.0"
 wavekit = ">=0.5.2"
 numpy = "*"
 RestrictedPython = ">=7.0"
-pyvcd = ">=0.4"
 
 [tool.poetry.group.test.dependencies]
 pytest = "^8.0"
