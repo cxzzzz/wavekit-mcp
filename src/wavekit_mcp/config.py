@@ -97,8 +97,8 @@ class ServerConfig:
 class SandboxConfig:
     """Configure RestrictedPython sandbox restrictions."""
     # Glob patterns for modules that can be imported (e.g., ["plotly.*", "matplotlib.*"])
-    # Empty list = only built-in modules allowed (default)
-    allowed_imports: list[str] = field(default_factory=list)
+    # Default allows wavekit (for MatchStatus, Waveform types) and numpy.
+    allowed_imports: list[str] = field(default_factory=lambda: ["wavekit", "wavekit.*", "numpy", "numpy.*"])
 
 
 @dataclass

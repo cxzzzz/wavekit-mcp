@@ -19,8 +19,11 @@ class TestGenerateMergedVcd:
             path = f.name
 
         try:
-            result = generate_merged_vcd([wf1, wf2], output_path=path)
-            assert result == path
+            result_path, name_mapping = generate_merged_vcd([wf1, wf2], output_path=path)
+            assert result_path == path
+            assert isinstance(name_mapping, dict)
+            assert 'top.clk' in name_mapping
+            assert 'top.data' in name_mapping
 
             # Verify file exists and has content
             content = Path(path).read_text()
@@ -43,7 +46,7 @@ class TestGenerateMergedVcd:
             path = f.name
 
         try:
-            generate_merged_vcd([wf], output_path=path)
+            result_path, _ = generate_merged_vcd([wf], output_path=path)
 
             content = Path(path).read_text()
             # Should have scope definitions
@@ -66,11 +69,12 @@ class TestGenerateMergedVcd:
 
         wf = sample_waveform_data("top.sig", [0, 1], [0, 10])
 
-        path = generate_merged_vcd([wf])
+        path, name_mapping = generate_merged_vcd([wf])
 
         try:
             assert Path(path).exists()
             assert path.endswith('.vcd')
+            assert isinstance(name_mapping, dict)
         finally:
             Path(path).unlink(missing_ok=True)
 

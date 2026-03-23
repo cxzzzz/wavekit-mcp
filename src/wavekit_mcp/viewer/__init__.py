@@ -5,7 +5,6 @@ viewer through the WCP (Waveform Control Protocol).
 
 Usage in session:
     viewer = Viewer()
-    viewer.start()
     viewer.waveforms.append(waveform1)
     viewer.waveforms.append(waveform2)
     viewer.markers.append(time=1000, name="event")
@@ -19,14 +18,11 @@ from .instance import Viewer, ViewerConfig, ViewerInstance
 from .wcp_client import WcpClient, WcpError
 
 __all__ = [
-    # Markers
     "MarkerItem",
     "MarkerList",
-    # Viewer
     "Viewer",
     "ViewerConfig",
-    "ViewerInstance",  # Backward compatibility alias
-    # WCP client (for testing/advanced usage)
+    "ViewerInstance",
     "WcpClient",
     "WcpError",
 ]

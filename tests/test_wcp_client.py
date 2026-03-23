@@ -50,7 +50,7 @@ class TestWcpClient:
             "version": "0",
             "commands": ["get_item_list", "add_variables"]
         }
-        mock_reader.readline.return_value = (json.dumps(greeting_response) + "\n").encode()
+        mock_reader.readuntil.return_value = (json.dumps(greeting_response) + "\0").encode()
 
         with patch('asyncio.open_connection', return_value=(mock_reader, mock_writer)):
             client = WcpClient("localhost", 12345)
@@ -73,8 +73,8 @@ class TestWcpClient:
             {"type": "greeting", "version": "0", "commands": []},
             {"type": "get_item_list", "ids": [1, 2, 3]}
         ]
-        mock_reader.readline.side_effect = [
-            (json.dumps(r) + "\n").encode() for r in responses
+        mock_reader.readuntil.side_effect = [
+            (json.dumps(r) + "\0").encode() for r in responses
         ]
 
         with patch('asyncio.open_connection', return_value=(mock_reader, mock_writer)):
@@ -96,8 +96,8 @@ class TestWcpClient:
             {"type": "greeting", "version": "0", "commands": []},
             {"type": "add_variables", "ids": [10, 11]}
         ]
-        mock_reader.readline.side_effect = [
-            (json.dumps(r) + "\n").encode() for r in responses
+        mock_reader.readuntil.side_effect = [
+            (json.dumps(r) + "\0").encode() for r in responses
         ]
 
         with patch('asyncio.open_connection', return_value=(mock_reader, mock_writer)):
@@ -119,8 +119,8 @@ class TestWcpClient:
             {"type": "greeting", "version": "0", "commands": []},
             {"type": "error", "message": "Variable not found"}
         ]
-        mock_reader.readline.side_effect = [
-            (json.dumps(r) + "\n").encode() for r in responses
+        mock_reader.readuntil.side_effect = [
+            (json.dumps(r) + "\0").encode() for r in responses
         ]
 
         with patch('asyncio.open_connection', return_value=(mock_reader, mock_writer)):
@@ -142,8 +142,8 @@ class TestWcpClient:
             {"type": "greeting", "version": "0", "commands": []},
             {"type": "set_cursor"}  # Ack
         ]
-        mock_reader.readline.side_effect = [
-            (json.dumps(r) + "\n").encode() for r in responses
+        mock_reader.readuntil.side_effect = [
+            (json.dumps(r) + "\0").encode() for r in responses
         ]
 
         with patch('asyncio.open_connection', return_value=(mock_reader, mock_writer)):
@@ -164,8 +164,8 @@ class TestWcpClient:
         responses = [
             {"type": "greeting", "version": "0", "commands": []}
         ]
-        mock_reader.readline.side_effect = [
-            (json.dumps(r) + "\n").encode() for r in responses
+        mock_reader.readuntil.side_effect = [
+            (json.dumps(r) + "\0").encode() for r in responses
         ]
 
         with patch('asyncio.open_connection', return_value=(mock_reader, mock_writer)):
@@ -190,7 +190,7 @@ class TestWcpClientCommands:
         mock_writer = AsyncMock()
 
         greeting = {"type": "greeting", "version": "0", "commands": []}
-        mock_reader.readline.return_value = (json.dumps(greeting) + "\n").encode()
+        mock_reader.readuntil.return_value = (json.dumps(greeting) + "\0").encode()
 
         with patch('asyncio.open_connection', return_value=(mock_reader, mock_writer)):
             client = WcpClient("localhost", 12345)
@@ -208,7 +208,7 @@ class TestWcpClientCommands:
                 {"id": 1, "name": "top.clk", "type": "Variable"}
             ]
         }
-        reader.readline.return_value = (json.dumps(response) + "\n").encode()
+        reader.readuntil.return_value = (json.dumps(response) + "\0").encode()
 
         result = await client.get_item_info([1])
         assert len(result) == 1
@@ -228,7 +228,7 @@ class TestWcpClientCommands:
         client, reader, _ = connected_client
 
         response = {"type": "add_markers", "ids": [100, 101]}
-        reader.readline.return_value = (json.dumps(response) + "\n").encode()
+        reader.readuntil.return_value = (json.dumps(response) + "\0").encode()
 
         ids = await client.add_markers([
             {"time": 100, "name": "start"},
@@ -250,7 +250,7 @@ class TestWcpClientCommands:
         client, reader, _ = connected_client
 
         response = {"type": "load", "waveforms_loaded": True}
-        reader.readline.return_value = (json.dumps(response) + "\n").encode()
+        reader.readuntil.return_value = (json.dumps(response) + "\0").encode()
 
         result = await client.load("/path/to/file.vcd")
         assert result.get("waveforms_loaded") is True

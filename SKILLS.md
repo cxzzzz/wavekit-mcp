@@ -8,8 +8,13 @@ Follow the patterns below exactly. Do NOT use `import wavekit` or `with VcdReade
 ## Session setup
 
 ```python
-# All pre-injected — no imports needed:
-# VcdReader(path), FsdbReader(path), open_reader(path), np, Pattern, MatchStatus, Viewer
+# Pre-injected — no imports needed:
+# wavekit, Pattern, VcdReader(path), FsdbReader(path), Viewer
+#
+# Other wavekit types: wavekit.MatchStatus, wavekit.Waveform, etc.
+#
+# Available via default allowed_imports:
+# import numpy as np
 ```
 
 Always: open_session() → run() × N → close_session()
@@ -25,7 +30,7 @@ Use `list_sessions()` to see all active sessions with their descriptions and cre
 
 ## Waveform Viewer
 
-The `Viewer` class provides waveform visualization via Surfer. It automatically falls back from GUI mode (requires display) to server mode (browser access).
+The `Viewer` class provides waveform visualization via Surfer. It automatically falls back from GUI mode (requires display) to fallback mode (generates VCD file).
 
 ```python
 # Load waveform data
@@ -34,14 +39,15 @@ data = r.load_waveform("tb.data[7:0]", clock="tb.clk")
 
 # Create viewer and add waveforms
 viewer = Viewer()
-viewer.top_group.append(wf)
-viewer.top_group.append(data)
+viewer.waveforms.append(wf)
+viewer.waveforms.append(data)
+viewer.markers.append(time=1000, name="event")
 viewer.push_state()
 
 # Print URL for user
 print(f"View at: {viewer.url}")
 # GUI mode: "gui://surfer" (local window)
-# Server mode: "http://localhost:PORT" (browser)
+# Fallback mode: "file:///path/to/viewer.vcd"
 
 # Close when done (or session close will clean up)
 viewer.close()
@@ -49,31 +55,20 @@ viewer.close()
 
 ### Viewer features
 
-| Feature | GUI mode | Server mode |
-|---------|----------|-------------|
+| Feature | GUI mode | Fallback mode |
+|---------|----------|---------------|
 | Programmatic control (WCP) | ✓ | ✗ |
 | Add/remove signals | ✓ | ✗ |
 | Set cursor/viewport | ✓ | ✗ |
-| Browser access | ✗ | ✓ |
-| VCD reload on push_state | ✓ | ✓ |
+| Markers | ✓ | ✓ (in VCD) |
+| VCD file output | ✓ | ✓ |
 
-### Display items
+### Markers
 
 ```python
-from wavekit_mcp.viewer import GroupItem, DividerItem, MarkerItem, WaveformItem
-
-# Group signals together
-group = GroupItem(name="FIFO")
-group.append(wf_ptr)
-group.append(wf_data)
-viewer.top_group.append(group)
-
-# Add visual divider
-viewer.top_group.append(DividerItem())
-
-# Add markers
-viewer.markers.append(MarkerItem(time=1000, name="start"))
-viewer.markers.append(MarkerItem(time=5000, name="end"))
+# Add time markers
+viewer.markers.append(time=1000, name="start")
+viewer.markers.append(time=5000, name="end")
 viewer.push_state()
 ```
 
@@ -86,11 +81,7 @@ viewer.push_state()
 ```python
 r = VcdReader("/path/to/sim.vcd")     # VCD
 r = FsdbReader("/path/to/sim.fsdb")   # FSDB
-# auto-detection by extension:
-r = open_reader("/path/to/sim.vcd")
 ```
-
-Readers are auto-closed on reset_session() / close_session().
 
 ### Reader methods
 
@@ -250,6 +241,7 @@ if len(mismatch.value):
 Find transaction sequences (handshakes, latencies, bursts):
 
 ```python
+# Pattern is pre-injected — no import needed
 # AXI read latency
 arvalid = r.load_waveform("tb.arvalid", clock="tb.clk")
 arready = r.load_waveform("tb.arready", clock="tb.clk")
@@ -288,6 +280,8 @@ for i, beats in enumerate(valid.captures["beats"].value[:5]):
 
 ```python
 # Guard condition (fail if enable drops during wait)
+# MatchStatus accessed via wavekit module
+
 result = (
     Pattern()
     .wait(req, guard=enable)
@@ -295,9 +289,31 @@ result = (
     .timeout(64)
     .match()
 )
-violated = result.status.mask(result.status == MatchStatus.REQUIRE_VIOLATED)
+violated = result.status.mask(result.status == wavekit.MatchStatus.REQUIRE_VIOLATED)
 print(f"guard violations: {len(violated.value)}")
 ```
+
+---
+
+## Waveform vs numpy — which to use?
+
+**Key insight**: Waveform methods preserve time/clock arrays; numpy operations on `.value` do not.
+
+```python
+# ✓ Waveform methods — preserves time/clock arrays
+filtered = data.filter(lambda v: v > 0)
+window = data.cycle_slice(100, 500)
+masked = data.mask(valid == 1)
+viewer.waveforms.append(filtered)  # can display
+
+# ✗ numpy on .value — loses time/clock arrays
+arr = data.value[data.value > 0]
+viewer.waveforms.append(???)       # cannot display
+```
+
+**Rule of thumb**:
+- Goal: display in Viewer → use Waveform methods (`filter`, `mask`, `cycle_slice`, etc.)
+- Goal: compute statistics → use numpy (`np.mean(data.value)`, etc.)
 
 ---
 

@@ -77,13 +77,16 @@ WAVEKIT_MCP_RUN_TIMEOUT_SEC=300 wavekit-mcp
 |------|-------------|
 | `open_session(description?)` | Create a session; returns `session_id` |
 | `close_session(sid)` | Release all resources |
-| `reset_session(sid)` | Clear variables, keep session |
 | `list_sessions()` | List all active sessions with id, description, created_at |
 | `run(sid, code)` | Execute Python; returns `{result, output, error, duration_ms}` |
 | `get_history(sid, n)` | Last N execution records |
 | `get_api_docs(topic)` | wavekit API reference |
 
-Every session has these pre-injected: `open_reader(path)`, `VcdReader`, `FsdbReader`, `np`, `Pattern`, `MatchStatus`, `Viewer`, `GroupItem`, `DividerItem`, `MarkerItem`.
+Every session has these pre-injected: `wavekit`, `Pattern`, `VcdReader`, `FsdbReader`, `Viewer`.
+
+Use `wavekit.MatchStatus`, `wavekit.Waveform`, etc. for other types.
+
+`numpy` is available via default allowed_imports: `import numpy as np`.
 
 `run()` returns structured summaries for large objects rather than raw data — the Waveform, ndarray, and MatchResult objects stay in the session namespace for further processing.
 
@@ -93,11 +96,11 @@ Every session has these pre-injected: `open_reader(path)`, `VcdReader`, `FsdbRea
 
 ```python
 # call 1
-r = open_reader("/data/sim.vcd")
+r = VcdReader("/data/sim.vcd")
 data = r.load_waveform("tb.dut.data[7:0]", clock="tb.clk")
 
 # call 2 — state persists
-print(f"samples={len(data.value)}  mean={np.mean(data.value):.2f}")
+print(f"samples={len(data.value)}")
 ```
 
 ### Pattern matching (AXI read latency)

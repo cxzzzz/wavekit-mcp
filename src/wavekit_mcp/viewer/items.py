@@ -1,7 +1,4 @@
-"""Display items for the Viewer module.
-
-This module defines markers - the only display item type that WCP supports.
-"""
+"""Display items for the Viewer module."""
 
 from __future__ import annotations
 
@@ -10,11 +7,7 @@ from dataclasses import dataclass
 
 @dataclass
 class MarkerItem:
-    """
-    Time marker.
-
-    WCP supports creating Marker items via add_markers.
-    """
+    """Time marker."""
     time: int
     name: str | None = None
     item_id: int | None = None
@@ -24,55 +17,40 @@ class MarkerItem:
         return f"Marker({self.time}, {self.name})"
 
 
-class MarkerList:
+class MarkerList(list):
     """
-    List of time markers with convenient methods.
+    List of time markers with convenient append method.
     """
-
-    def __init__(self):
-        self._markers: list[MarkerItem] = []
 
     def append(
         self,
-        time: int,
+        marker_or_time: int | MarkerItem | None = None,
+        *,
+        time: int | None = None,
         name: str | None = None,
         color: str | None = None
     ) -> MarkerItem:
         """
         Add a new marker.
 
-        Args:
-            time: Timestamp for the marker
-            name: Optional name/label
-            color: Optional color
-
-        Returns:
-            The created MarkerItem
+        Two usage patterns:
+            markers.append(time=1000, name="event")  # create and add
+            markers.append(marker_item)               # add existing MarkerItem
         """
-        marker = MarkerItem(time=time, name=name, color=color)
-        self._markers.append(marker)
+        # Determine which form was used
+        if isinstance(marker_or_time, MarkerItem):
+            marker = marker_or_time
+        elif marker_or_time is not None:
+            # Positional timestamp: append(100, name="x")
+            marker = MarkerItem(time=marker_or_time, name=name, color=color)
+        elif time is not None:
+            # Keyword form: append(time=100, name="x")
+            marker = MarkerItem(time=time, name=name, color=color)
+        else:
+            raise ValueError("append() requires either a timestamp or a MarkerItem")
+
+        super().append(marker)
         return marker
 
-    def remove(self, marker: MarkerItem) -> None:
-        """Remove a marker."""
-        self._markers.remove(marker)
-
-    def clear(self) -> None:
-        """Clear all markers."""
-        self._markers.clear()
-
-    def __iter__(self):
-        return iter(self._markers)
-
-    def __len__(self) -> int:
-        return len(self._markers)
-
-    def __getitem__(self, index: int) -> MarkerItem:
-        return self._markers[index]
-
-    def __repr__(self) -> str:
-        return repr(self._markers)
-
     def to_list(self) -> list[MarkerItem]:
-        """Get a copy of the markers list."""
-        return list(self._markers)
+        return list(self)

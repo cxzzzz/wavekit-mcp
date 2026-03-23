@@ -18,7 +18,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from RestrictedPython import compile_restricted
 from RestrictedPython.Guards import (
     guarded_iter_unpack_sequence,
@@ -222,37 +221,25 @@ class Session:
     def __init__(self, session_id: str, config: Config):
         self.session_id = session_id
         self.config = config
-        self.managed_readers: list[Any] = []
-        self.managed_viewers: list[Any] = []
         self.history: list[HistoryEntry] = []
         self.namespace: dict[str, Any] = {}
         self._log = logging.getLogger("wavekit_mcp.session")
-        self._reset_namespace()
+        self._init_namespace()
 
     # ── namespace management ──────────────────────────────────────────────────
 
-    def _reset_namespace(self) -> None:
-        """Close open readers/viewers, clear user variables, re-inject base objects."""
-        self._close_readers()
-        self._close_viewers()
-
+    def _init_namespace(self) -> None:
+        """Initialize namespace with pre-injected objects."""
         import wavekit
-
-        # Import viewer components for injection
-        from .viewer import Viewer, MarkerItem
+        from .viewer import Viewer
 
         ns: dict[str, Any] = {
             **_BASE_GUARDS,
-            "np": np,
+            "wavekit": wavekit,
             "Pattern": wavekit.Pattern,
-            "MatchStatus": wavekit.MatchStatus,
-            "open_reader": self._make_open_reader(),
-            "VcdReader": self._make_reader_class(wavekit.VcdReader),
-            "FsdbReader": self._make_reader_class(wavekit.FsdbReader),
-            # Viewer class - user creates instance with Viewer()
-            "Viewer": self._make_viewer_class(Viewer),
-            # Marker type for viewer
-            "MarkerItem": MarkerItem,
+            "VcdReader": wavekit.VcdReader,
+            "FsdbReader": wavekit.FsdbReader,
+            "Viewer": Viewer,
         }
 
         if self.config.file_access.read_enabled or self.config.file_access.write_enabled:
@@ -265,79 +252,8 @@ class Session:
 
         self.namespace = ns
 
-    def _close_managed(self, items: list, name: str) -> None:
-        """Close a list of managed resources."""
-        for item in items:
-            try:
-                item.close()
-            except Exception as e:
-                self._log.warning("Error closing %s: %s", name, e)
-        items.clear()
-
-    def _close_readers(self) -> None:
-        self._close_managed(self.managed_readers, "reader")
-
-    def _close_viewers(self) -> None:
-        self._close_managed(self.managed_viewers, "viewer")
-
     def close(self) -> None:
-        self._close_readers()
-        self._close_viewers()
         self.namespace = {}
-
-    # ── injected helpers ──────────────────────────────────────────────────────
-
-    def _make_open_reader(self):
-        def open_reader(path: str):
-            """Open a VCD or FSDB waveform file.
-
-            File format is auto-detected by extension (.vcd → VcdReader,
-            anything else → FsdbReader).  The reader is automatically closed
-            when the session is reset or closed.
-
-            Returns a Reader with: load_waveform(), load_matched_waveforms(),
-            get_matched_signals(), get_matched_scopes(), eval(), top_scope_list()
-            """
-            import wavekit
-
-            ext = Path(path).suffix.lower()
-            if ext == ".vcd":
-                r = wavekit.VcdReader(path)
-            else:
-                r = wavekit.FsdbReader(path)
-            r.__enter__()
-            self.managed_readers.append(r)
-            return r
-
-        return open_reader
-
-    def _make_reader_class(self, cls):
-        """Return a wrapper that instantiates cls, enters its context, and registers it for auto-close."""
-        managed_readers = self.managed_readers
-
-        class _ManagedReader:
-            def __new__(new_cls, path: str, *args, **kwargs):
-                r = cls(path, *args, **kwargs)
-                r.__enter__()
-                managed_readers.append(r)
-                return r
-
-        _ManagedReader.__name__ = cls.__name__
-        _ManagedReader.__qualname__ = cls.__qualname__
-        return _ManagedReader
-
-    def _make_viewer_class(self, cls):
-        """Return a wrapper that instantiates Viewer and registers it for auto-close."""
-        managed_viewers = self.managed_viewers
-
-        class _ManagedViewer(cls):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                managed_viewers.append(self)
-
-        _ManagedViewer.__name__ = cls.__name__
-        _ManagedViewer.__qualname__ = cls.__qualname__
-        return _ManagedViewer
 
     def _make_safe_open(self):
         cfg = self.config.file_access
@@ -392,7 +308,7 @@ class Session:
         if t.is_alive():
             error = (
                 f"Execution timed out after {self.config.limits.run_timeout_sec}s. "
-                "The session may be in a partial state — consider reset_session()."
+                "The session may be in a partial state — please open a new session."
             )
             self._add_history(HistoryEntry(code=code, error=error, duration_ms=duration_ms))
             return RunResult(result=None, output="", error=error, duration_ms=duration_ms)
@@ -483,10 +399,6 @@ class SessionManager:
                 session.close()
                 del self._sessions[session_id]
             self._log.info("session_close sid=%s total=%d", session_id, len(self._sessions))
-
-    def reset_session(self, session_id: str) -> None:
-        self._get(session_id).reset()
-        self._log.info("session_reset sid=%s", session_id)
 
     def run(self, session_id: str, code: str) -> RunResult:
         session = self._get(session_id)
@@ -707,18 +619,6 @@ class SessionProxy:
             result = self._detect_crash()
             self._add_history(code, result.error, 0)
             return result
-
-    def reset(self) -> None:
-        """Reset the session namespace."""
-        if self._closed or self._crashed:
-            return
-
-        try:
-            self._parent_conn.send({"type": "reset"})
-            if self._parent_conn.poll(timeout=10):
-                self._parent_conn.recv()  # Wait for ack
-        except (BrokenPipeError, ConnectionError, EOFError):
-            self._detect_crash()
 
     def close(self) -> None:
         """Close the session and terminate the worker."""

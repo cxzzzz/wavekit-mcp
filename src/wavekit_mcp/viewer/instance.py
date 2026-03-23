@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from .items import MarkerItem, MarkerList
 from .wcp_client import WcpClient, WcpError
-from .vcd_writer import generate_merged_vcd, get_wcp_signal_name
+from .vcd_writer import generate_merged_vcd
 
 if TYPE_CHECKING:
     from wavekit import Waveform
@@ -41,7 +41,6 @@ _NO_DISPLAY_PATTERNS = [
 
 @dataclass
 class ViewerConfig:
-    """Configuration for a Viewer."""
     surfer_path: str | None = None  # Path to surfer binary, None = find in PATH
     fallback_dir: str | None = None  # Directory for VCD files in fallback mode
 
@@ -55,8 +54,7 @@ class Viewer:
     - Fallback mode: Generates VCD files for user to open with any viewer
 
     Usage:
-        viewer = Viewer()
-        url = viewer.start()  # Returns "gui://surfer" or "file:///path/to/vcd"
+        viewer = Viewer()  # Auto-starts on creation
         viewer.waveforms.append(waveform1)
         viewer.waveforms.append(waveform2)
         viewer.markers.append(time=1000, name="event")
@@ -81,13 +79,24 @@ class Viewer:
         # Internal state
         self._signal_ids: dict[str, int] = {}  # signal_name -> Surfer item_id
         self._vcd_path: str | None = None
+        self._name_mapping: dict[str, str] = {}  # original_name -> WCP name
+
+        # Start the viewer (try GUI mode, fall back to VCD mode)
+        try:
+            self._start_gui_mode()
+        except RuntimeError as e:
+            error_msg = str(e)
+            if any(pattern in error_msg for pattern in _NO_DISPLAY_PATTERNS):
+                logger.info("No display available, falling back to VCD file mode")
+                self._start_fallback_mode()
+            else:
+                raise
 
     # =========================================================================
     # Lifecycle
     # =========================================================================
 
     def _find_binary(self, binary_name: str) -> str:
-        """Find a binary path from config or PATH."""
         config_path = getattr(self.config, f"{binary_name}_path", None)
         if config_path is not None:
             return config_path
@@ -99,34 +108,7 @@ class Viewer:
             )
         return path
 
-    def start(self) -> str:
-        """
-        Start the viewer.
-
-        Tries GUI mode first (with WCP control), falls back to VCD file export
-        if no display is available.
-
-        Returns:
-            - "gui://surfer" for GUI mode
-            - "file:///path/to/viewer.vcd" for fallback mode
-        """
-        if self._mode is not None:
-            return self.url
-
-        # Try GUI mode first
-        try:
-            return self._start_gui_mode()
-        except RuntimeError as e:
-            error_msg = str(e)
-            # Check if it's a "no display" error
-            if any(pattern in error_msg for pattern in _NO_DISPLAY_PATTERNS):
-                logger.info("No display available, falling back to VCD file mode")
-                return self._start_fallback_mode()
-            else:
-                raise
-
-    def _start_gui_mode(self) -> str:
-        """Start Surfer in GUI mode with WCP connection."""
+    def _start_gui_mode(self) -> None:
         surfer_path = self._find_binary("surfer")
 
         # Generate random port for WCP
@@ -212,10 +194,7 @@ address = "127.0.0.1:{wcp_port}"
         fd, self._vcd_path = tempfile.mkstemp(suffix=".vcd", prefix="viewer_")
         os.close(fd)
 
-        return self.url
-
-    def _start_fallback_mode(self) -> str:
-        """Setup for VCD file export mode (no GUI)."""
+    def _start_fallback_mode(self) -> None:
         # Determine output directory
         if self.config.fallback_dir:
             fallback_dir = Path(self.config.fallback_dir)
@@ -229,10 +208,7 @@ address = "127.0.0.1:{wcp_port}"
         self._mode = "fallback"
         logger.info("Viewer in fallback mode, VCD file: %s", self._vcd_path)
 
-        return self.url
-
     def close(self) -> None:
-        """Close the viewer and release resources."""
         # Close WCP connection
         if self._wcp and self._loop:
             try:
@@ -283,7 +259,6 @@ address = "127.0.0.1:{wcp_port}"
 
     @property
     def url(self) -> str:
-        """The viewer URL or VCD file path."""
         if self._mode == "gui":
             return "gui://surfer"
         elif self._mode == "fallback":
@@ -292,12 +267,10 @@ address = "127.0.0.1:{wcp_port}"
 
     @property
     def mode(self) -> str | None:
-        """Current mode: 'gui', 'fallback', or None if not started."""
         return self._mode
 
     @property
     def is_running(self) -> bool:
-        """Check if the viewer is running (always True for fallback mode)."""
         if self._mode == "fallback":
             return True
         return self._process is not None and self._process.poll() is None
@@ -307,12 +280,6 @@ address = "127.0.0.1:{wcp_port}"
     # =========================================================================
 
     def push_state(self) -> None:
-        """
-        Push current state to the viewer.
-
-        In GUI mode: Sends to Surfer via WCP.
-        In fallback mode: Generates VCD file for user to open.
-        """
         if self._vcd_path is None:
             raise RuntimeError("Viewer not started")
 
@@ -321,8 +288,8 @@ address = "127.0.0.1:{wcp_port}"
                 self._loop.run_until_complete(self._wcp.clear())
             return
 
-        # Generate merged VCD
-        generate_merged_vcd(self.waveforms, self._vcd_path)
+        # Generate merged VCD and get name mapping
+        self._vcd_path, self._name_mapping = generate_merged_vcd(self.waveforms, self._vcd_path)
         logger.debug("Generated VCD: %s", self._vcd_path)
 
         if self._mode == "gui" and self._wcp:
@@ -334,9 +301,9 @@ address = "127.0.0.1:{wcp_port}"
             # Add visible variables
             for wf in self.waveforms:
                 signal_name = wf.signal.full_name
-                if signal_name:
+                if signal_name and signal_name in self._name_mapping:
                     # Use transformed name for WCP (avoids bit selector interpretation)
-                    wcp_name = get_wcp_signal_name(signal_name)
+                    wcp_name = self._name_mapping[signal_name]
 
                     ids = self._loop.run_until_complete(
                         self._wcp.add_variables([wcp_name])
@@ -365,32 +332,26 @@ address = "127.0.0.1:{wcp_port}"
     # =========================================================================
 
     def set_cursor(self, timestamp: int) -> None:
-        """Set cursor position (GUI mode only)."""
         if self._wcp:
             self._loop.run_until_complete(self._wcp.set_cursor(timestamp))
 
     def set_viewport_to(self, timestamp: int) -> None:
-        """Move viewport center (GUI mode only)."""
         if self._wcp:
             self._loop.run_until_complete(self._wcp.set_viewport_to(timestamp))
 
     def set_viewport_range(self, start: int, end: int) -> None:
-        """Set viewport range (GUI mode only)."""
         if self._wcp:
             self._loop.run_until_complete(self._wcp.set_viewport_range(start, end))
 
     def zoom_to_fit(self) -> None:
-        """Auto-zoom to fit all signals (GUI mode only)."""
         if self._wcp:
             self._loop.run_until_complete(self._wcp.zoom_to_fit())
 
     def reload(self) -> None:
-        """Reload the current VCD file (GUI mode only)."""
         if self._wcp:
             self._loop.run_until_complete(self._wcp.reload())
 
     def focus(self, signal_name: str) -> None:
-        """Focus (scroll to) a signal in the viewer (GUI mode only)."""
         if self._mode == "fallback":
             raise RuntimeError("focus() is not supported in fallback mode")
         if not self._wcp:
@@ -407,7 +368,6 @@ address = "127.0.0.1:{wcp_port}"
         return "<Viewer (not started)>"
 
     def __enter__(self):
-        self.start()
         return self
 
     def __exit__(self, *args):

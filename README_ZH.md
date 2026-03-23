@@ -75,13 +75,16 @@ WAVEKIT_MCP_RUN_TIMEOUT_SEC=300 wavekit-mcp
 |------|------|
 | `open_session(description?)` | 创建会话 |
 | `close_session(sid)` | 关闭会话 |
-| `reset_session(sid)` | 重置会话（清空变量） |
 | `list_sessions()` | 列出所有会话 |
 | `run(sid, code)` | 执行 Python 代码 |
 | `get_history(sid, n)` | 查看执行历史 |
 | `get_api_docs(topic)` | 查看 wavekit API 文档 |
 
-每个会话预置：`open_reader()`、`VcdReader`、`FsdbReader`、`np`、`Pattern`、`MatchStatus`、`Viewer`、`GroupItem`、`DividerItem`、`MarkerItem`
+每个会话预置：`wavekit`、`Pattern`、`VcdReader`、`FsdbReader`、`Viewer`
+
+其他类型通过 `wavekit.MatchStatus`、`wavekit.Waveform` 等访问。
+
+`numpy` 可通过默认 allowed_imports 导入：`import numpy as np`
 
 ## 示例
 
@@ -89,11 +92,11 @@ WAVEKIT_MCP_RUN_TIMEOUT_SEC=300 wavekit-mcp
 
 ```python
 # call 1
-r = open_reader("/data/sim.vcd")
+r = VcdReader("/data/sim.vcd")
 data = r.load_waveform("tb.dut.data[7:0]", clock="tb.clk")
 
 # call 2 — state persists
-print(f"samples={len(data.value)}  mean={np.mean(data.value):.2f}")
+print(f"samples={len(data.value)}")
 ```
 
 ### AXI 读延迟分析

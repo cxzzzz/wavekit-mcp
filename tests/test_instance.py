@@ -25,12 +25,11 @@ def viewer_config():
 
 @pytest.fixture
 def viewer(viewer_config):
-    """Create and start a Viewer for testing."""
+    """Create a Viewer for testing."""
     from wavekit_mcp.viewer import Viewer
 
     v = Viewer(viewer_config)
     try:
-        v.start()
         yield v
     finally:
         v.close()
@@ -47,9 +46,8 @@ class TestViewer:
 
         viewer = Viewer(viewer_config)
 
-        url = viewer.start()
         # URL can be gui://surfer (GUI mode) or file:// (fallback mode)
-        assert url.startswith("gui://") or url.startswith("file://")
+        assert viewer.url.startswith("gui://") or viewer.url.startswith("file://")
         assert viewer.is_running
         assert viewer.mode in ("gui", "fallback")
 
@@ -79,7 +77,6 @@ class TestViewerGUI:
 
         v = Viewer(viewer_config)
         try:
-            v.start()
             if v.mode != "gui":
                 pytest.skip("GUI mode not available (no display)")
             yield v
@@ -116,7 +113,6 @@ class TestViewerWithWaveforms:
 
         v = Viewer(viewer_config)
         try:
-            v.start()
             if v.mode != "gui":
                 pytest.skip("GUI mode not available (no display)")
             yield v
@@ -183,7 +179,6 @@ class TestViewerFallback:
 
         v = Viewer(viewer_config)
         try:
-            v.start()
             if v.mode != "fallback":
                 pytest.skip("Fallback mode not used (GUI mode was available)")
             yield v

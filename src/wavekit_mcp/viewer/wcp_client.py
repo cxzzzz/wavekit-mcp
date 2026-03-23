@@ -53,13 +53,6 @@ class WcpClient:
     """
 
     def __init__(self, host: str, port: int):
-        """
-        Initialize the client.
-
-        Args:
-            host: Server hostname
-            port: Server port
-        """
         self._host = host
         self._port = port
         self._reader: asyncio.StreamReader | None = None
@@ -67,12 +60,6 @@ class WcpClient:
         self._connected = False
 
     async def connect(self) -> None:
-        """
-        Connect to the WCP server and perform handshake.
-
-        Raises:
-            ConnectionError: If connection fails
-        """
         logger.info(f"WcpClient: connecting to {self._host}:{self._port}")
 
         self._reader, self._writer = await asyncio.open_connection(
@@ -117,7 +104,6 @@ class WcpClient:
         logger.info(f"WcpClient: connected, server commands: {response.get('commands', [])}")
 
     async def close(self) -> None:
-        """Close the connection."""
         if self._writer:
             try:
                 self._writer.close()
@@ -158,19 +144,6 @@ class WcpClient:
         return json.loads(data[:-1].decode("utf-8"))
 
     async def _send_command(self, command: str, **kwargs) -> dict:
-        """
-        Send a command and wait for response.
-
-        Args:
-            command: Command name
-            **kwargs: Command arguments (placed at top level, not in "arguments")
-
-        Returns:
-            Response dict
-
-        Raises:
-            WcpError: If server returns an error
-        """
         # WCP format: {"type": "command", "command": "cmd_name", ...kwargs}
         # Note: arguments are placed at top level, not in an "arguments" object
         msg = {"type": "command", "command": command, **kwargs}
@@ -189,28 +162,10 @@ class WcpClient:
     # =========================================================================
 
     async def get_item_list(self) -> list[int]:
-        """
-        Get all displayed item IDs.
-
-        Returns:
-            List of item IDs
-        """
         response = await self._send_command("get_item_list")
         return response.get("ids", [])
 
     async def get_item_info(self, ids: list[int]) -> list[dict]:
-        """
-        Get detailed info for specified items.
-
-        Args:
-            ids: List of item IDs
-
-        Returns:
-            List of item info dicts, each with:
-                - name: Full signal path
-                - type: Item type (Variable, Group, Divider, Marker)
-                - id: Item ID
-        """
         response = await self._send_command("get_item_info", ids=ids)
         return response.get("results", [])
 
@@ -219,57 +174,21 @@ class WcpClient:
     # =========================================================================
 
     async def add_variables(self, variables: list[str]) -> list[int]:
-        """
-        Add signal variables to display.
-
-        Args:
-            variables: List of full signal paths (e.g., ["top.clk", "top.data[7:0]"])
-
-        Returns:
-            List of assigned item IDs
-        """
         response = await self._send_command("add_variables", variables=variables)
         return response.get("ids", [])
 
     async def add_scope(self, scope: str, recursive: bool = True) -> list[int]:
-        """
-        Add all signals in a scope to display.
-
-        Args:
-            scope: Scope path (e.g., "top.dut")
-            recursive: Include nested scopes
-
-        Returns:
-            List of assigned item IDs
-        """
         response = await self._send_command("add_scope", scope=scope, recursive=recursive)
         return response.get("ids", [])
 
     async def add_items(self, items: list[str], recursive: bool = True) -> list[int]:
-        """
-        Add a mix of signals and scopes.
-
-        Args:
-            items: List of signal/scope paths
-            recursive: Include nested scopes
-
-        Returns:
-            List of assigned item IDs
-        """
         response = await self._send_command("add_items", items=items, recursive=recursive)
         return response.get("ids", [])
 
     async def remove_items(self, ids: list[int]) -> None:
-        """
-        Remove items from display.
-
-        Args:
-            ids: List of item IDs to remove
-        """
         await self._send_command("remove_items", ids=ids)
 
     async def clear(self) -> None:
-        """Clear all displayed items."""
         await self._send_command("clear")
 
     # =========================================================================
@@ -277,22 +196,9 @@ class WcpClient:
     # =========================================================================
 
     async def set_item_color(self, id: int, color: str) -> None:
-        """
-        Set item foreground color.
-
-        Args:
-            id: Item ID
-            color: Color string (e.g., "#FF0000")
-        """
         await self._send_command("set_item_color", id=id, color=color)
 
     async def focus_item(self, id: int) -> None:
-        """
-        Focus (scroll to) an item in the viewer.
-
-        Args:
-            id: Item ID
-        """
         await self._send_command("focus_item", id=id)
 
     # =========================================================================
@@ -303,18 +209,6 @@ class WcpClient:
         self,
         markers: list[dict],
     ) -> list[int]:
-        """
-        Add time markers.
-
-        Args:
-            markers: List of marker dicts, each with:
-                - time: Timestamp (required)
-                - name: Optional name (default: "")
-                - move_focus: If True, scroll to the marker (required, no default)
-
-        Returns:
-            List of assigned marker IDs
-        """
         response = await self._send_command("add_markers", markers=markers)
         return response.get("ids", [])
 
@@ -323,40 +217,15 @@ class WcpClient:
     # =========================================================================
 
     async def set_cursor(self, timestamp: int) -> None:
-        """
-        Set cursor position.
-
-        Args:
-            timestamp: Timestamp for cursor
-        """
         await self._send_command("set_cursor", timestamp=timestamp)
 
     async def set_viewport_to(self, timestamp: int) -> None:
-        """
-        Move viewport center without changing zoom.
-
-        Args:
-            timestamp: New center timestamp
-        """
         await self._send_command("set_viewport_to", timestamp=timestamp)
 
     async def set_viewport_range(self, start: int, end: int) -> None:
-        """
-        Set viewport range (changes zoom level).
-
-        Args:
-            start: Start timestamp
-            end: End timestamp
-        """
         await self._send_command("set_viewport_range", start=start, end=end)
 
     async def zoom_to_fit(self, viewport_idx: int = 0) -> None:
-        """
-        Auto-zoom to fit all signals.
-
-        Args:
-            viewport_idx: Viewport index (usually 0)
-        """
         await self._send_command("zoom_to_fit", viewport_idx=viewport_idx)
 
     # =========================================================================
@@ -364,26 +233,10 @@ class WcpClient:
     # =========================================================================
 
     async def load(self, source: str) -> dict:
-        """
-        Load a waveform file.
-
-        Args:
-            source: File path (VCD, FST, etc.)
-
-        Returns:
-            Response dict (may include waveforms_loaded event)
-        """
         return await self._send_command("load", source=source)
 
     async def reload(self) -> dict:
-        """
-        Reload current waveform file.
-
-        Returns:
-            Response dict (may include waveforms_loaded event)
-        """
         return await self._send_command("reload")
 
     async def shutdown(self) -> None:
-        """Shutdown the WCP server."""
         await self._send_command("shutdown")

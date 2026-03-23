@@ -40,28 +40,22 @@ def open_session(description: str | None = None) -> str:
 
     Returns a session_id used by all other tools.
 
-    Pre-injected objects available in every session:
-      open_reader(path)  — open a .vcd or .fsdb file; auto-closed on reset/close
-      VcdReader(path)    — open a VCD file directly; auto-closed on reset/close
-      FsdbReader(path)   — open an FSDB file directly; auto-closed on reset/close
-      np                 — numpy
-      Pattern            — wavekit.Pattern  (temporal pattern matching DSL)
-      MatchStatus        — wavekit.MatchStatus
-      Viewer             — class for waveform visualization (call Viewer() to create instance)
-      GroupItem          — display group item for viewer
-      DividerItem        — display divider item for viewer
-      MarkerItem         — marker item for viewer
-      open(path, mode)   — standard file I/O (only if enabled in server config,
-                           restricted to configured allowed paths)
+    Pre-injected objects:
+      wavekit            — wavekit module (use wavekit.MatchStatus, wavekit.Waveform, etc.)
+      Pattern            — wavekit.Pattern (temporal pattern matching)
+      VcdReader(path)    — open a VCD file
+      FsdbReader(path)   — open an FSDB file
+      Viewer             — waveform visualization (call Viewer() to create instance)
+
+    Available via default allowed_imports:
+      import numpy as np
 
     Typical workflow:
       1. sid = open_session()
       2. run(sid, "r = VcdReader('/data/sim.vcd')")
       3. run(sid, "data = r.load_waveform('tb.data[7:0]', clock='tb.clk')")
-      4. run(sid, "print(np.mean(data.value))")
+      4. run(sid, "print(len(data.value))")
       5. close_session(sid)
-
-    IMPORTANT: Do NOT use `import wavekit` — all wavekit objects are pre-injected.
     """
     return _get_manager().open_session(description)
 
@@ -94,38 +88,33 @@ def list_sessions() -> list[dict]:
 
 
 @mcp.tool()
-def reset_session(session_id: str) -> str:
-    """Reset a session: close open readers and clear all user-defined variables.
-
-    Pre-injected objects (open_reader, np, Pattern, MatchStatus, Viewer, etc.) are restored.
-    Use this to start a fresh analysis without creating a new session.
-    """
-    _get_manager().reset_session(session_id)
-    return f"Session '{session_id}' reset."
-
-
-@mcp.tool()
 def run(session_id: str, code: str) -> dict[str, Any]:
     """Execute Python code in a persistent session. State persists across calls.
 
-    PRE-INJECTED: VcdReader(path), FsdbReader(path), open_reader(path), np, Pattern, MatchStatus
-    Do NOT use `import wavekit` — all objects are already available.
-    UNFAMILIAR WITH THE API? Call get_api_docs(session_id) before writing code.
+    PRE-INJECTED: VcdReader(path), FsdbReader(path), Pattern, Viewer, wavekit
+    UNFAMILIAR WITH THE API? Call get_api_docs(topic='Waveform') first.
 
     OPEN FILES:
-        r  = VcdReader("/path/to/sim.vcd")      # open VCD file
-        r2 = FsdbReader("/path/to/ref.fsdb")    # open FSDB file
-        # or use open_reader() for auto-detection by extension
-        r3 = open_reader("/path/to/sim.vcd")    # .vcd → VcdReader, other → FsdbReader
-        # multiple readers allowed; all auto-closed on reset/close
+        r = VcdReader("/path/to/sim.vcd")      # open VCD file
+        r = FsdbReader("/path/to/sim.fsdb")    # open FSDB file
+
+    WAVEFORM PROCESSING FOR VIEWER DISPLAY:
+        # Use Waveform methods to preserve time/clock arrays:
+        filtered = data.filter(lambda v: v > 0)   # ✓ keeps time/clock arrays
+        viewer.waveforms.append(filtered)          # works
+
+        # numpy operations on .value lose time/clock arrays:
+        arr = data.value[data.value > 0]          # ✗ only values, no time info
+        viewer.waveforms.append(???)               # can't use
+
+        # Rule: for Viewer display → Waveform methods; for statistics → numpy
 
     VIEWER:
-        # Create a viewer instance (Surfer process starts on Viewer())
         viewer = Viewer()
-        viewer.top_group.append(wf)   # add waveform to display
-        viewer.push_state()           # push changes to Surfer
-        print(viewer.url)             # get URL to view in browser
-        viewer.close()                # close when done (or session close will clean up)
+        viewer.waveforms.append(wf)
+        viewer.markers.append(time=1000, name="event")
+        viewer.push_state()
+        print(viewer.url)  # "gui://surfer" or "file:///path/to/viewer.vcd"
 
     MULTI-CALL WORKFLOW:
         # call 1 — load
@@ -239,8 +228,6 @@ Always follow this structure:
   2. run(sid, ...) — one or more calls, state persists between them
   3. close_session(sid) when done
 
-Use reset_session(sid) to clear variables without reopening files.
-
 **IMPORTANT**: If you use the viewer, keep the session open until the user
 confirms they are done viewing. Closing the session will close the viewer.
 
@@ -253,15 +240,11 @@ confirms they are done viewing. Closing the session will close the viewer.
 r = VcdReader("/path/to/sim.vcd")
 r = FsdbReader("/path/to/sim.fsdb")
 
-# Or use open_reader() for auto-detection by file extension
-r = open_reader("/path/to/sim.vcd")    # .vcd → VcdReader, other → FsdbReader
-
 # Multiple files (e.g. golden vs actual comparison)
 r_gold = VcdReader("/data/golden.vcd")
 r_act  = VcdReader("/data/actual.vcd")
 ```
 
-All readers are auto-closed on reset_session() / close_session().
 Do NOT use `import wavekit` or `with VcdReader(...)` — just assign directly.
 
 ---
@@ -276,7 +259,7 @@ wf = r.load_waveform("top.clk", clock="top.clk")
 
 # Create viewer and add waveform
 viewer = Viewer()
-viewer.top_group.append(wf)
+viewer.waveforms.append(wf)
 viewer.push_state()
 
 # Print URL for user to view in browser
@@ -321,7 +304,7 @@ occupancy = r.eval("tb.dut.w_ptr[3:0] - tb.dut.r_ptr[3:0]", clock="tb.clk")
 | `{start..end}` | Integer range | `"tb.lane_{0..3}.valid"` |
 | `{start..end..step}` | Integer range with step | `"tb.lane_{0..6..2}.valid"` |
 | Multiple `{}` | Cartesian product of all expansions | `"tb.u{0,1}.fifo_{a,b}.cnt"` |
-| `@<regex>` | Python `re.fullmatch()`; `(...)` groups captured | `r"tb.dut.@(req\|ack\|valid)"` |
+| `@<regex>` | Python `re.fullmatch()`; `(...)` groups captured | `r"tb.dut.@(req|ack|valid)"` |
 | `$$ModName` | Any-depth scope by module def name (FSDB only) | `"$$axi_slave.rdata[31:0]"` |
 | `$ModName` | Direct-child scope by module def name (FSDB only) | `"tb.dut.$pipe_stage"` |
 
@@ -442,7 +425,7 @@ result = (
 )
 
 ok = result.filter_valid()
-violated = result.status.mask(result.status == MatchStatus.REQUIRE_VIOLATED)
+violated = result.status.mask(result.status == wavekit.MatchStatus.REQUIRE_VIOLATED)
 print(f"ok={len(ok.duration.value)}  guard_violations={len(violated.value)}")
 ```
 

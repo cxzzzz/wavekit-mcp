@@ -70,10 +70,6 @@ def worker_main(conn: Any, config: Any, stderr_log_path: str | None = None) -> N
                     "data": result,
                 })
 
-            elif msg_type == "reset":
-                session._reset_namespace()
-                conn.send({"type": "ack"})
-
             elif msg_type == "close":
                 session.close()
                 conn.send({"type": "ack"})
