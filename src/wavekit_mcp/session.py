@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import fnmatch
 import io
 import logging
 import multiprocessing
@@ -17,7 +18,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from RestrictedPython import compile_restricted
 from RestrictedPython.Guards import (
     guarded_iter_unpack_sequence,
@@ -176,96 +176,84 @@ _BASE_GUARDS: dict[str, Any] = {
 }
 
 
+def _make_guarded_import(allowed_patterns: list[str]):
+    """Create a guarded __import__ that checks against allowed patterns.
+
+    Args:
+        allowed_patterns: List of glob patterns (e.g., ["plotly.*", "matplotlib"])
+
+    Returns:
+        A guarded __import__ function
+    """
+    real_import = _builtins.__import__
+
+    def guarded_import(
+        name: str,
+        globals=None,
+        locals=None,
+        fromlist=(),
+        level=0,
+    ):
+        # Check if module name matches any allowed pattern
+        for pattern in allowed_patterns:
+            # Handle both exact match and glob pattern
+            if fnmatch.fnmatch(name, pattern):
+                return real_import(name, globals, locals, fromlist, level)
+            # Special case: pattern "foo" should match "foo.bar" (submodule)
+            if pattern != "*" and name.startswith(pattern.rstrip(".*") + "."):
+                return real_import(name, globals, locals, fromlist, level)
+            # Special case: pattern "foo.*" should match "foo"
+            if pattern.endswith(".*") and name == pattern[:-2]:
+                return real_import(name, globals, locals, fromlist, level)
+
+        raise ImportError(
+            f"Import of '{name}' is not allowed. "
+            f"Allowed patterns: {allowed_patterns}. "
+            f"Add to sandbox.allowed_imports in config to allow."
+        )
+
+    return guarded_import
+
+
 # ── Session ───────────────────────────────────────────────────────────────────
 
 class Session:
     def __init__(self, session_id: str, config: Config):
         self.session_id = session_id
         self.config = config
-        self.managed_readers: list[Any] = []
         self.history: list[HistoryEntry] = []
         self.namespace: dict[str, Any] = {}
-        self._reset_namespace()
+        self._log = logging.getLogger("wavekit_mcp.session")
+        self._init_namespace()
 
     # ── namespace management ──────────────────────────────────────────────────
 
-    def _reset_namespace(self) -> None:
-        """Close open readers, clear user variables, re-inject base objects."""
-        self._close_readers()
-
+    def _init_namespace(self) -> None:
+        """Initialize namespace with pre-injected objects."""
         import wavekit
-        import plotly.graph_objects as go
-        import plotly.express as px
+        from .viewer import Viewer
 
         ns: dict[str, Any] = {
             **_BASE_GUARDS,
-            "np": np,
+            "wavekit": wavekit,
             "Pattern": wavekit.Pattern,
-            "MatchStatus": wavekit.MatchStatus,
-            "go": go,
-            "px": px,
-            "open_reader": self._make_open_reader(),
-            "VcdReader": self._make_reader_class(wavekit.VcdReader),
-            "FsdbReader": self._make_reader_class(wavekit.FsdbReader),
+            "VcdReader": wavekit.VcdReader,
+            "FsdbReader": wavekit.FsdbReader,
+            "Viewer": Viewer,
         }
 
         if self.config.file_access.read_enabled or self.config.file_access.write_enabled:
             ns["open"] = self._make_safe_open()
 
+        # Add guarded import (always, with friendly error for disallowed imports)
+        allowed_imports = self.config.sandbox.allowed_imports
+        ns["__builtins__"] = dict(ns["__builtins__"])
+        ns["__builtins__"]["__import__"] = _make_guarded_import(allowed_imports)
+
         self.namespace = ns
 
-    def _close_readers(self) -> None:
-        for r in self.managed_readers:
-            try:
-                r.close()
-            except Exception:
-                pass
-        self.managed_readers = []
-
     def close(self) -> None:
-        self._close_readers()
         self.namespace = {}
-
-    # ── injected helpers ──────────────────────────────────────────────────────
-
-    def _make_open_reader(self):
-        def open_reader(path: str):
-            """Open a VCD or FSDB waveform file.
-
-            File format is auto-detected by extension (.vcd → VcdReader,
-            anything else → FsdbReader).  The reader is automatically closed
-            when the session is reset or closed.
-
-            Returns a Reader with: load_waveform(), load_matched_waveforms(),
-            get_matched_signals(), get_matched_scopes(), eval(), top_scope_list()
-            """
-            import wavekit
-
-            ext = Path(path).suffix.lower()
-            if ext == ".vcd":
-                r = wavekit.VcdReader(path)
-            else:
-                r = wavekit.FsdbReader(path)
-            r.__enter__()
-            self.managed_readers.append(r)
-            return r
-
-        return open_reader
-
-    def _make_reader_class(self, cls):
-        """Return a wrapper that instantiates cls, enters its context, and registers it for auto-close."""
-        managed_readers = self.managed_readers
-
-        class _ManagedReader:
-            def __new__(new_cls, path: str, *args, **kwargs):
-                r = cls(path, *args, **kwargs)
-                r.__enter__()
-                managed_readers.append(r)
-                return r
-
-        _ManagedReader.__name__ = cls.__name__
-        _ManagedReader.__qualname__ = cls.__qualname__
-        return _ManagedReader
 
     def _make_safe_open(self):
         cfg = self.config.file_access
@@ -320,7 +308,7 @@ class Session:
         if t.is_alive():
             error = (
                 f"Execution timed out after {self.config.limits.run_timeout_sec}s. "
-                "The session may be in a partial state — consider reset_session()."
+                "The session may be in a partial state — please open a new session."
             )
             self._add_history(HistoryEntry(code=code, error=error, duration_ms=duration_ms))
             return RunResult(result=None, output="", error=error, duration_ms=duration_ms)
@@ -412,10 +400,6 @@ class SessionManager:
                 del self._sessions[session_id]
             self._log.info("session_close sid=%s total=%d", session_id, len(self._sessions))
 
-    def reset_session(self, session_id: str) -> None:
-        self._get(session_id).reset()
-        self._log.info("session_reset sid=%s", session_id)
-
     def run(self, session_id: str, code: str) -> RunResult:
         session = self._get(session_id)
         result = session.execute(code)
@@ -452,11 +436,6 @@ class SessionManager:
             {"code": e.code, "error": e.error, "duration_ms": e.duration_ms}
             for e in entries
         ]
-
-    def save_plot(self, session_id: str, figure_var: str) -> dict[str, str | None]:
-        """Save a plotly Figure to HTML and PNG, return filenames."""
-        session = self._get(session_id)
-        return session.save_plot(figure_var)
 
     def _get(self, session_id: str) -> SessionProxy:
         session = self._sessions.get(session_id)
@@ -641,18 +620,6 @@ class SessionProxy:
             self._add_history(code, result.error, 0)
             return result
 
-    def reset(self) -> None:
-        """Reset the session namespace."""
-        if self._closed or self._crashed:
-            return
-
-        try:
-            self._parent_conn.send({"type": "reset"})
-            if self._parent_conn.poll(timeout=10):
-                self._parent_conn.recv()  # Wait for ack
-        except (BrokenPipeError, ConnectionError, EOFError):
-            self._detect_crash()
-
     def close(self) -> None:
         """Close the session and terminate the worker."""
         if self._closed:
@@ -751,36 +718,3 @@ class SessionProxy:
         max_h = self.config.limits.history_max
         if len(self.history) > max_h:
             self.history = self.history[-max_h:]
-
-    def save_plot(self, figure_var: str) -> dict[str, str | None]:
-        """Save a plotly Figure to HTML and PNG, return filenames."""
-        if self._closed:
-            raise RuntimeError("Session is closed. Call open_session() to create a new one.")
-        if self._crashed:
-            raise RuntimeError("Session has crashed. Call open_session() to create a new one.")
-
-        try:
-            self._parent_conn.send({
-                "type": "save_plot",
-                "figure_var": figure_var,
-            })
-
-            if self._parent_conn.poll(timeout=30):
-                msg = self._parent_conn.recv()
-
-                if msg["type"] == "save_plot_result":
-                    return {
-                        "html_filename": msg["html_filename"],
-                        "png_filename": msg.get("png_filename"),
-                    }
-                elif msg["type"] == "error":
-                    raise RuntimeError(msg["message"])
-                else:
-                    raise RuntimeError(f"Unknown response type: {msg['type']}")
-
-            else:
-                raise RuntimeError("save_plot timed out")
-
-        except (BrokenPipeError, ConnectionError, EOFError) as e:
-            self._detect_crash()
-            raise RuntimeError("Session crashed while saving plot") from e

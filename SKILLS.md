@@ -8,8 +8,13 @@ Follow the patterns below exactly. Do NOT use `import wavekit` or `with VcdReade
 ## Session setup
 
 ```python
-# All pre-injected — no imports needed:
-# VcdReader(path), FsdbReader(path), open_reader(path), np, Pattern, MatchStatus
+# Pre-injected — no imports needed:
+# wavekit, Pattern, VcdReader(path), FsdbReader(path), Viewer
+#
+# Other wavekit types: wavekit.MatchStatus, wavekit.Waveform, etc.
+#
+# Available via default allowed_imports:
+# import numpy as np
 ```
 
 Always: open_session() → run() × N → close_session()
@@ -23,16 +28,78 @@ Use `list_sessions()` to see all active sessions with their descriptions and cre
 
 ---
 
+## Waveform Viewer
+
+The `Viewer` class provides waveform visualization via Surfer. It automatically falls back from GUI mode (requires display) to fallback mode (generates VCD file).
+
+```python
+# Load waveform data
+wf = r.load_waveform("tb.clk", clock="tb.clk")
+data = r.load_waveform("tb.data[7:0]", clock="tb.clk")
+
+# Create viewer and add waveforms
+viewer = Viewer()
+viewer.waveforms.append(wf)
+viewer.waveforms.append(data)
+viewer.markers.append(time=1000, name="event")
+viewer.focus(data)        # Scroll to data signal
+viewer.zoom_to_fit()      # Auto-fit viewport
+viewer.push_state()       # Apply all changes
+
+# Print URL for user
+print(f"View at: {viewer.url}")
+
+# Close when done (or session close will clean up)
+viewer.close()
+```
+
+### Viewer features
+
+| Feature | GUI mode | Fallback mode |
+|---------|----------|---------------|
+| Programmatic control (WCP) | ✓ | ✗ |
+| Add/remove signals | ✓ | ✗ |
+| Set cursor/viewport | ✓ | ✗ |
+| Markers | ✓ | ✓ (in VCD) |
+| VCD file output | ✓ | ✓ |
+
+### Viewport control
+
+```python
+viewer.zoom_to_fit()                  # Auto-fit all signals
+viewer.set_viewport_range(0, 10000)   # Set exact time range
+viewer.set_viewport_to(5000)          # Center viewport at timestamp
+viewer.set_cursor(3000)               # Set cursor position
+viewer.push_state()                   # Apply changes
+```
+
+### Focus on signal
+
+```python
+# focus() takes a Waveform object
+viewer.focus(data)
+viewer.push_state()
+```
+
+### Markers
+
+```python
+# Add time markers
+viewer.markers.append(time=1000, name="start")
+viewer.markers.append(time=5000, name="end")
+viewer.push_state()
+```
+
+**IMPORTANT**: Keep the session open while the user is viewing. Closing the session closes the viewer.
+
+---
+
 ## Open a file
 
 ```python
 r = VcdReader("/path/to/sim.vcd")     # VCD
 r = FsdbReader("/path/to/sim.fsdb")   # FSDB
-# auto-detection by extension:
-r = open_reader("/path/to/sim.vcd")
 ```
-
-Readers are auto-closed on reset_session() / close_session().
 
 ### Reader methods
 
@@ -192,6 +259,7 @@ if len(mismatch.value):
 Find transaction sequences (handshakes, latencies, bursts):
 
 ```python
+# Pattern is pre-injected — no import needed
 # AXI read latency
 arvalid = r.load_waveform("tb.arvalid", clock="tb.clk")
 arready = r.load_waveform("tb.arready", clock="tb.clk")
@@ -230,6 +298,8 @@ for i, beats in enumerate(valid.captures["beats"].value[:5]):
 
 ```python
 # Guard condition (fail if enable drops during wait)
+# MatchStatus accessed via wavekit module
+
 result = (
     Pattern()
     .wait(req, guard=enable)
@@ -237,9 +307,31 @@ result = (
     .timeout(64)
     .match()
 )
-violated = result.status.mask(result.status == MatchStatus.REQUIRE_VIOLATED)
+violated = result.status.mask(result.status == wavekit.MatchStatus.REQUIRE_VIOLATED)
 print(f"guard violations: {len(violated.value)}")
 ```
+
+---
+
+## Waveform vs numpy — which to use?
+
+**Key insight**: Waveform methods preserve time/clock arrays; numpy operations on `.value` do not.
+
+```python
+# ✓ Waveform methods — preserves time/clock arrays
+filtered = data.filter(lambda v: v > 0)
+window = data.cycle_slice(100, 500)
+masked = data.mask(valid == 1)
+viewer.waveforms.append(filtered)  # can display
+
+# ✗ numpy on .value — loses time/clock arrays
+arr = data.value[data.value > 0]
+viewer.waveforms.append(???)       # cannot display
+```
+
+**Rule of thumb**:
+- Goal: display in Viewer → use Waveform methods (`filter`, `mask`, `cycle_slice`, etc.)
+- Goal: compute statistics → use numpy (`np.mean(data.value)`, etc.)
 
 ---
 

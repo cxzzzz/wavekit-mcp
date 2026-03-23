@@ -29,3 +29,15 @@ write_allowed_paths  = ["/tmp/**"]
 [log]
 file  = ""           # path to log file; empty = stderr only
 level = "INFO"       # DEBUG / INFO / WARNING / ERROR
+
+[sandbox]
+# Glob patterns for modules that can be imported beyond the built-in allowlist.
+# The default built-in allowlist includes: numpy, standard library modules, etc.
+# Use this to allow additional packages like plotting libraries.
+# allowed_imports = []
+# Examples:
+#   allowed_imports = ["plotly"]           # allow plotly only
+#   allowed_imports = ["plotly.*"]         # allow plotly and all submodules
+#   allowed_imports = ["matplotlib.*"]     # allow matplotlib and all submodules
+#   allowed_imports = ["plotly", "matplotlib.*", "scipy.*"]
+#   allowed_imports = ["*"]                # allow all imports (disables import restrictions)
