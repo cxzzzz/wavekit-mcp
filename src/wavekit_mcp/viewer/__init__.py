@@ -3,12 +3,14 @@
 This module provides the components needed to control a Surfer waveform
 viewer through the WCP (Waveform Control Protocol).
 
-Usage in session:
+Usage:
     viewer = Viewer()
     viewer.waveforms.append(waveform1)
     viewer.waveforms.append(waveform2)
     viewer.markers.append(time=1000, name="event")
-    viewer.push_state()
+    viewer.focus(waveform1)
+    viewer.zoom_to_fit()
+    viewer.push_state()  # Apply all changes
     print(viewer.url)
     viewer.close()
 """

@@ -58,9 +58,14 @@ class Viewer:
         viewer.waveforms.append(waveform1)
         viewer.waveforms.append(waveform2)
         viewer.markers.append(time=1000, name="event")
-        viewer.push_state()
+        viewer.focus(waveform1)  # Scroll to waveform1
+        viewer.zoom_to_fit()     # Auto-fit viewport
+        viewer.push_state()      # Apply all changes
         print(viewer.url)
         viewer.close()
+
+    Note: All view changes (waveforms, markers, focus, cursor, viewport) are
+    accumulated and applied during push_state().
     """
 
     def __init__(self, config: ViewerConfig | None = None):
@@ -80,6 +85,11 @@ class Viewer:
         self._signal_ids: dict[str, int] = {}  # signal_name -> Surfer item_id
         self._vcd_path: str | None = None
         self._name_mapping: dict[str, str] = {}  # original_name -> WCP name
+
+        # Pending state (applied during push_state)
+        self._pending_cursor: int | None = None
+        self._pending_viewport: tuple[str, int | tuple[int, int]] | None = None  # ("to", ts) | ("range", (start, end)) | ("fit",)
+        self._pending_focus: Waveform | None = None
 
         # Start the viewer (try GUI mode, fall back to VCD mode)
         try:
@@ -324,41 +334,63 @@ address = "127.0.0.1:{wcp_port}"
                 for m, mid in zip(markers_list, marker_ids):
                     m.item_id = mid
 
+            # Focus pending waveform
+            if self._pending_focus is not None:
+                signal_name = self._pending_focus.signal.full_name
+                if signal_name in self._signal_ids:
+                    self._loop.run_until_complete(
+                        self._wcp.focus_item(self._signal_ids[signal_name])
+                    )
+                self._pending_focus = None
+
+            # Apply pending cursor
+            if self._pending_cursor is not None:
+                self._loop.run_until_complete(self._wcp.set_cursor(self._pending_cursor))
+                self._pending_cursor = None
+
+            # Apply pending viewport
+            if self._pending_viewport is not None:
+                vp_type, vp_data = self._pending_viewport
+                if vp_type == "to":
+                    self._loop.run_until_complete(self._wcp.set_viewport_to(vp_data))
+                elif vp_type == "range":
+                    start, end = vp_data
+                    self._loop.run_until_complete(self._wcp.set_viewport_range(start, end))
+                elif vp_type == "fit":
+                    self._loop.run_until_complete(self._wcp.zoom_to_fit())
+                self._pending_viewport = None
+
         elif self._mode == "fallback":
             logger.info("VCD file updated: %s", self._vcd_path)
 
     # =========================================================================
-    # View control (GUI mode only)
+    # View control (applied during push_state)
     # =========================================================================
 
     def set_cursor(self, timestamp: int) -> None:
-        if self._wcp:
-            self._loop.run_until_complete(self._wcp.set_cursor(timestamp))
+        """Set cursor position. Applied during next push_state()."""
+        self._pending_cursor = timestamp
 
     def set_viewport_to(self, timestamp: int) -> None:
-        if self._wcp:
-            self._loop.run_until_complete(self._wcp.set_viewport_to(timestamp))
+        """Move viewport center to timestamp. Applied during next push_state()."""
+        self._pending_viewport = ("to", timestamp)
 
     def set_viewport_range(self, start: int, end: int) -> None:
-        if self._wcp:
-            self._loop.run_until_complete(self._wcp.set_viewport_range(start, end))
+        """Set viewport range. Applied during next push_state()."""
+        self._pending_viewport = ("range", (start, end))
 
     def zoom_to_fit(self) -> None:
-        if self._wcp:
-            self._loop.run_until_complete(self._wcp.zoom_to_fit())
+        """Auto-zoom to fit all signals. Applied during next push_state()."""
+        self._pending_viewport = ("fit", None)
 
     def reload(self) -> None:
+        """Reload the current VCD file. Applied immediately."""
         if self._wcp:
             self._loop.run_until_complete(self._wcp.reload())
 
-    def focus(self, signal_name: str) -> None:
-        if self._mode == "fallback":
-            raise RuntimeError("focus() is not supported in fallback mode")
-        if not self._wcp:
-            raise RuntimeError("Viewer not started")
-        if signal_name not in self._signal_ids:
-            raise ValueError(f"Signal '{signal_name}' not found. Call push_state first.")
-        self._loop.run_until_complete(self._wcp.focus_item(self._signal_ids[signal_name]))
+    def focus(self, waveform: Waveform) -> None:
+        """Focus (scroll to) a waveform. Applied during next push_state()."""
+        self._pending_focus = waveform
 
     def __repr__(self) -> str:
         if self._mode == "gui":

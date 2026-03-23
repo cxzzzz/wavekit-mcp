@@ -42,12 +42,12 @@ viewer = Viewer()
 viewer.waveforms.append(wf)
 viewer.waveforms.append(data)
 viewer.markers.append(time=1000, name="event")
-viewer.push_state()
+viewer.focus(data)        # Scroll to data signal
+viewer.zoom_to_fit()      # Auto-fit viewport
+viewer.push_state()       # Apply all changes
 
 # Print URL for user
 print(f"View at: {viewer.url}")
-# GUI mode: "gui://surfer" (local window)
-# Fallback mode: "file:///path/to/viewer.vcd"
 
 # Close when done (or session close will clean up)
 viewer.close()
@@ -62,6 +62,24 @@ viewer.close()
 | Set cursor/viewport | ✓ | ✗ |
 | Markers | ✓ | ✓ (in VCD) |
 | VCD file output | ✓ | ✓ |
+
+### Viewport control
+
+```python
+viewer.zoom_to_fit()                  # Auto-fit all signals
+viewer.set_viewport_range(0, 10000)   # Set exact time range
+viewer.set_viewport_to(5000)          # Center viewport at timestamp
+viewer.set_cursor(3000)               # Set cursor position
+viewer.push_state()                   # Apply changes
+```
+
+### Focus on signal
+
+```python
+# focus() takes a Waveform object
+viewer.focus(data)
+viewer.push_state()
+```
 
 ### Markers
 
