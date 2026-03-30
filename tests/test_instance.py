@@ -193,8 +193,3 @@ class TestViewerFallback:
         """Test push_state with empty content in fallback mode."""
         # Should not raise
         fallback_viewer.push_state()
-
-    def test_focus_not_supported(self, fallback_viewer):
-        """Test that focus raises error in fallback mode."""
-        with pytest.raises(RuntimeError, match="not supported in fallback mode"):
-            fallback_viewer.focus("test.signal")

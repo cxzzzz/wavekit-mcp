@@ -6,9 +6,10 @@ authors = []
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.10,<3.15"
+tomli = ">=2.0"
 fastmcp = ">=2.0"
-wavekit = ">=0.5.2"
+wavekit = ">=0.5.6"
 numpy = "*"
 RestrictedPython = ">=7.0"
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-import tomllib
+import tomli
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -130,7 +130,7 @@ class Config:
         data: dict = {}
         if Path(config_path).exists():
             with open(config_path, "rb") as f:
-                data = tomllib.load(f)
+                data = tomli.load(f)
 
         limits = _build_dataclass(LimitsConfig, data.get("limits", {}))
         file_access = _build_dataclass(FileAccessConfig, data.get("file_access", {}))
