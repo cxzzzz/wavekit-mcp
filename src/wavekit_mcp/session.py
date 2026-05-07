@@ -245,10 +245,11 @@ class Session:
         if self.config.file_access.read_enabled or self.config.file_access.write_enabled:
             ns["open"] = self._make_safe_open()
 
-        # Add guarded import (always, with friendly error for disallowed imports)
+        # Add guarded import to _BASE_GUARDS so _exec() restore picks it up automatically.
+        # Must copy __builtins__ first — _ALLOWED_BUILTINS is a module-level shared dict.
         allowed_imports = self.config.sandbox.allowed_imports
-        ns["__builtins__"] = dict(ns["__builtins__"])
-        ns["__builtins__"]["__import__"] = _make_guarded_import(allowed_imports)
+        _BASE_GUARDS["__builtins__"] = dict(_ALLOWED_BUILTINS)
+        _BASE_GUARDS["__builtins__"]["__import__"] = _make_guarded_import(allowed_imports)
 
         self.namespace = ns
 
