@@ -138,6 +138,9 @@ allowed_imports = ["plotly.*", "matplotlib.*"]  # glob 模式匹配
 # allowed_imports = ["*"]  # 允许所有导入
 ```
 
-## 更多
+## AI 助手 Skill
 
-常用模式速查见 [SKILLS.md](./SKILLS.md)
+本仓库包含一个用于 wavekit-mcp 的 Claude/OpenCode skill：
+
+- [skills/wavekit-usage/SKILL.md](./skills/wavekit-usage/SKILL.md) — 可安装的 skill 入口
+- [skills/wavekit-usage/references/cheatsheet.md](./skills/wavekit-usage/references/cheatsheet.md) — 常用模式速查

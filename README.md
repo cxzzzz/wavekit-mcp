@@ -137,6 +137,9 @@ allowed_imports = ["plotly.*", "matplotlib.*"]  # glob patterns
 # allowed_imports = ["*"]  # allow all imports
 ```
 
-## More
+## AI assistant skill
 
-See [SKILLS.md](./SKILLS.md) for a cheatsheet of common patterns.
+This repository includes a Claude/OpenCode skill for wavekit-mcp usage:
+
+- [skills/wavekit-usage/SKILL.md](./skills/wavekit-usage/SKILL.md) — installable skill entry point
+- [skills/wavekit-usage/references/cheatsheet.md](./skills/wavekit-usage/references/cheatsheet.md) — detailed cheatsheet of common patterns
