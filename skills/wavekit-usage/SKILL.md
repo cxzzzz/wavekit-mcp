@@ -1,6 +1,6 @@
 ---
 name: wavekit-usage
-description: Use this skill whenever the user wants to inspect, debug, analyze, compare, or visualize hardware simulation waveforms using wavekit-mcp, including VCD, FSDB, waveform viewers, signal statistics, temporal pattern matching, handshakes, latency, bursts, or hardware simulation debugging. Use it even if the user only mentions waveform files, signal paths, RTL simulation traces, VCD/FSDB, AXI timing, or wants to open signals in a viewer.
+description: Use this skill whenever the user wants to inspect, debug, analyze, compare, or visualize hardware simulation waveforms using wavekit-mcp, including VCD, FST, FSDB, waveform viewers, signal statistics, temporal pattern matching, handshakes, latency, bursts, or hardware simulation debugging. Use it even if the user only mentions waveform files, signal paths, RTL simulation traces, VCD/FST/FSDB, AXI timing, or wants to open signals in a viewer.
 ---
 
 # Wavekit MCP Usage
@@ -10,7 +10,7 @@ Use the wavekit MCP tools to analyze hardware simulation waveforms through a per
 ## Core workflow
 
 1. Open a session with a useful description.
-2. Open the waveform file with `VcdReader(path)` or `FsdbReader(path)`.
+2. Open the waveform file with `VcdReader(path)`, `FstReader(path)`, or `FsdbReader(path)`.
 3. Load only the signals needed for the user's question.
 4. Compute scalar summaries, filtered events, compact tables, or temporal matches.
 5. Use `Viewer` when the user needs visual inspection.
@@ -19,8 +19,8 @@ Use the wavekit MCP tools to analyze hardware simulation waveforms through a per
 
 ## Important constraints
 
-- Do not use `import wavekit`; `wavekit`, `Pattern`, `VcdReader`, `FsdbReader`, and `Viewer` are pre-injected.
-- Do not use `with VcdReader(...)` or `with FsdbReader(...)`.
+- Do not use `import wavekit`; `wavekit`, `Pattern`, `Channel`, `VcdReader`, `FstReader`, `FsdbReader`, and `Viewer` are pre-injected.
+- Do not use `with VcdReader(...)`, `with FstReader(...)`, or `with FsdbReader(...)`.
 - Use Waveform methods when preserving time/clock alignment matters, especially before sending data to `Viewer`.
 - Use numpy on `.value` only for statistics and reductions.
 - Avoid printing large arrays. Print summaries, counts, histograms, ranges, first failing cycle, and small representative samples.
@@ -60,7 +60,7 @@ print(f"View at: {viewer.url}")
 Read `references/cheatsheet.md` for detailed examples covering:
 
 - Session setup and viewer control
-- VCD/FSDB readers
+- VCD/FST/FSDB readers
 - Signal path pattern syntax
 - Waveform methods and arithmetic
 - Batch loading and computed expressions

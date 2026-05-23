@@ -1,15 +1,16 @@
 [tool.poetry]
 name = "wavekit-mcp"
-version = "0.3.3"
+version = "0.4.0"
 description = "MCP server for AI-driven waveform analysis via wavekit"
-authors = []
+authors = ["cxzzzz <cxz19961010@outlook.com>"]
 readme = "README.md"
+repository = "https://github.com/cxzzzz/wavekit-mcp"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.15"
 tomli = ">=2.0"
 fastmcp = ">=2.0"
-wavekit = ">=0.5.6"
+wavekit = ">=0.6.1"
 pyvcd = ">=0.4.0"
 numpy = "*"
 RestrictedPython = ">=7.0"

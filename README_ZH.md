@@ -9,7 +9,7 @@
 **问题：** 波形数据量极大，一次仿真动辄包含数千信号、数百万次翻转。把原始数据喂给 LLM 既浪费 token，也难以得到有意义的分析结果。
 
 **思路：** 与其给数据，不如给工具。wavekit-mcp 让 AI 通过编写代码来分析波形：
-- 加载 VCD/FSDB 信号
+- 加载 VCD/FST/FSDB 信号
 - 时序模式匹配
 - 统计计算、异常检测、事件提取
 
@@ -80,7 +80,7 @@ WAVEKIT_MCP_RUN_TIMEOUT_SEC=300 wavekit-mcp
 | `get_history(sid, n)` | 查看执行历史 |
 | `get_api_docs(topic)` | 查看 wavekit API 文档 |
 
-每个会话预置：`wavekit`、`Pattern`、`VcdReader`、`FsdbReader`、`Viewer`
+每个会话预置：`wavekit`、`Pattern`、`Channel`、`VcdReader`、`FstReader`、`FsdbReader`、`Viewer`
 
 其他类型通过 `wavekit.MatchStatus`、`wavekit.Waveform` 等访问。
 

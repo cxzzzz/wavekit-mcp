@@ -9,7 +9,7 @@ Follow the patterns below exactly. Do NOT use `import wavekit` or `with VcdReade
 
 ```python
 # Pre-injected — no imports needed:
-# wavekit, Pattern, VcdReader(path), FsdbReader(path), Viewer
+# wavekit, Pattern, Channel, VcdReader(path), FstReader(path), FsdbReader(path), Viewer
 #
 # Other wavekit types: wavekit.MatchStatus, wavekit.Waveform, etc.
 #
@@ -98,6 +98,7 @@ viewer.push_state()
 
 ```python
 r = VcdReader("/path/to/sim.vcd")     # VCD
+r = FstReader("/path/to/sim.fst")     # FST
 r = FsdbReader("/path/to/sim.fsdb")   # FSDB
 ```
 
@@ -283,7 +284,7 @@ captured_data = valid.captures["data"].value
 
 ```python
 # Variable-length burst (collect all beats until wlast)
-beat = Pattern().wait(wvalid & wready).capture("beats[]", wdata)
+beat = Pattern().wait(wvalid & wready).capture("beats", wdata, mode="list")
 result = (
     Pattern()
     .wait(awvalid & awready)
@@ -297,18 +298,18 @@ for i, beats in enumerate(valid.captures["beats"].value[:5]):
 ```
 
 ```python
-# Guard condition (fail if enable drops during wait)
+# Require condition (fail if enable drops during wait)
 # MatchStatus accessed via wavekit module
 
 result = (
     Pattern()
-    .wait(req, guard=enable)
+    .wait(req, require=enable)
     .wait(ack)
     .timeout(64)
     .match()
 )
 violated = result.status.mask(result.status == wavekit.MatchStatus.REQUIRE_VIOLATED)
-print(f"guard violations: {len(violated.value)}")
+print(f"require violations: {len(violated.value)}")
 ```
 
 ---

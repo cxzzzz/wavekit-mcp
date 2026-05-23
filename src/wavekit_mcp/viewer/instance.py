@@ -36,6 +36,8 @@ _NO_DISPLAY_PATTERNS = [
     "cannot open display",
     "couldn't open display",
     "No protocol specified",
+    "NoCompositor",
+    "WaylandError(Connection(NoCompositor))",
 ]
 
 

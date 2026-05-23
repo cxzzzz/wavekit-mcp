@@ -43,7 +43,9 @@ def open_session(description: str | None = None) -> str:
     Pre-injected objects:
       wavekit            — wavekit module (use wavekit.MatchStatus, wavekit.Waveform, etc.)
       Pattern            — wavekit.Pattern (temporal pattern matching)
+      Channel            — wavekit.Channel (FIFO routing for pattern waits)
       VcdReader(path)    — open a VCD file
+      FstReader(path)    — open an FST file
       FsdbReader(path)   — open an FSDB file
       Viewer             — waveform visualization (call Viewer() to create instance)
 
@@ -91,11 +93,12 @@ def list_sessions() -> list[dict]:
 def run(session_id: str, code: str) -> dict[str, Any]:
     """Execute Python code in a persistent session. State persists across calls.
 
-    PRE-INJECTED: VcdReader(path), FsdbReader(path), Pattern, Viewer, wavekit
+    PRE-INJECTED: VcdReader(path), FstReader(path), FsdbReader(path), Pattern, Channel, Viewer, wavekit
     UNFAMILIAR WITH THE API? Call get_api_docs(topic='Waveform') first.
 
     OPEN FILES:
         r = VcdReader("/path/to/sim.vcd")      # open VCD file
+        r = FstReader("/path/to/sim.fst")      # open FST file
         r = FsdbReader("/path/to/sim.fsdb")    # open FSDB file
 
     WAVEFORM PROCESSING FOR VIEWER DISPLAY:
@@ -174,6 +177,7 @@ def get_api_docs(topic: str = "") -> str:
       topic="Waveform"    — signal operations: filter, slice, bit ops, arithmetic
       topic="Reader"      — file loading: load_waveform, load_matched_waveforms, eval
       topic="Pattern"     — temporal pattern matching DSL
+      topic="Channel"     — FIFO routing for pattern wait() steps
       topic="MatchResult" — pattern match output structure
       topic="Signal"      — signal metadata dataclass
       topic="Scope"       — hierarchy tree node
@@ -185,10 +189,14 @@ def get_api_docs(topic: str = "") -> str:
         "Waveform": wavekit.Waveform,
         "Reader": Reader,
         "Pattern": wavekit.Pattern,
+        "Channel": wavekit.Channel,
         "MatchResult": wavekit.MatchResult,
         "MatchStatus": wavekit.MatchStatus,
         "Signal": wavekit.Signal,
         "Scope": wavekit.Scope,
+        "VcdReader": wavekit.VcdReader,
+        "FstReader": wavekit.FstReader,
+        "FsdbReader": wavekit.FsdbReader,
     }
 
     if not topic:
@@ -236,8 +244,9 @@ confirms they are done viewing. Closing the session will close the viewer.
 ## Opening Files
 
 ```python
-# Single file — use VcdReader or FsdbReader directly (both are pre-injected)
+# Single file — use VcdReader, FstReader, or FsdbReader directly (all are pre-injected)
 r = VcdReader("/path/to/sim.vcd")
+r = FstReader("/path/to/sim.fst")
 r = FsdbReader("/path/to/sim.fsdb")
 
 # Multiple files (e.g. golden vs actual comparison)
@@ -399,7 +408,7 @@ wready  = r.load_waveform("tb.wready",  clock="tb.clk")
 wlast   = r.load_waveform("tb.wlast",   clock="tb.clk")
 wdata   = r.load_waveform("tb.wdata[31:0]", clock="tb.clk")
 
-beat = Pattern().wait(wvalid & wready).capture("beats[]", wdata)
+beat = Pattern().wait(wvalid & wready).capture("beats", wdata, mode="list")
 
 result = (
     Pattern()
@@ -414,11 +423,11 @@ for i, beats in enumerate(valid.captures["beats"].value[:5]):
     print(f"burst {i}: {len(beats)} beats, data={beats}")
 ```
 
-### Handshake with guard (require valid stays high)
+### Handshake with require (enable must stay high)
 ```python
 result = (
     Pattern()
-    .wait(req, guard=enable)     # wait for req; fail if enable drops
+    .wait(req, require=enable)   # wait for req; fail if enable drops
     .wait(ack)
     .timeout(64)
     .match()
@@ -426,7 +435,7 @@ result = (
 
 ok = result.filter_valid()
 violated = result.status.mask(result.status == wavekit.MatchStatus.REQUIRE_VIOLATED)
-print(f"ok={len(ok.duration.value)}  guard_violations={len(violated.value)}")
+print(f"ok={len(ok.duration.value)}  require_violations={len(violated.value)}")
 ```
 
 ---
@@ -532,7 +541,7 @@ waves = r.load_matched_waveforms(
 - **Signed values**: pass `signed=True` to `load_waveform()` for two's-complement signals.
 - **X/Z values**: defaulted to 0; override with `xz_value=` parameter.
 - **Clock edge**: default is negedge (stable value capture); use `sample_on_posedge=True` if needed.
-- **Pattern result keys**: `captures["name"]` is a Waveform; for list captures (`"name[]"`),
+- **Pattern result keys**: `captures["name"]` is a Waveform; for list captures (`mode="list"`),
   each element of `.value` is a Python list of beat values.
 """
 

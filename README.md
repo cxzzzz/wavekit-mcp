@@ -4,14 +4,14 @@ English | [中文](./README_ZH.md)
 
 An MCP server that gives AI assistants a persistent, sandboxed Python environment for waveform analysis using [wavekit](https://github.com/cxzzzz/wavekit).
 
-The AI can open VCD/FSDB files, load and manipulate waveforms, run temporal pattern matching, and iterate across multiple tool calls — all within a shared execution context that persists state between calls.
+The AI can open VCD/FST/FSDB files, load and manipulate waveforms, run temporal pattern matching, and iterate across multiple tool calls — all within a shared execution context that persists state between calls.
 
 ## Why wavekit-mcp?
 
 **The problem:** Digital waveforms are huge. A single simulation can produce millions of transitions across thousands of signals. Sending this data to an LLM directly is both inefficient and ineffective — the AI sees noise, not insight.
 
 **Our approach:** Give the AI tools, not data. wavekit-mcp exposes wavekit's full waveform analysis capabilities through a persistent Python session. The AI writes code to:
-- Load signals from VCD/FSDB files
+- Load signals from VCD/FST/FSDB files
 - Apply temporal pattern matching
 - Compute statistics, detect anomalies, extract events
 
@@ -82,7 +82,7 @@ WAVEKIT_MCP_RUN_TIMEOUT_SEC=300 wavekit-mcp
 | `get_history(sid, n)` | Last N execution records |
 | `get_api_docs(topic)` | wavekit API reference |
 
-Every session has these pre-injected: `wavekit`, `Pattern`, `VcdReader`, `FsdbReader`, `Viewer`.
+Every session has these pre-injected: `wavekit`, `Pattern`, `Channel`, `VcdReader`, `FstReader`, `FsdbReader`, `Viewer`.
 
 Use `wavekit.MatchStatus`, `wavekit.Waveform`, etc. for other types.
 

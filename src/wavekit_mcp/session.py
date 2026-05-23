@@ -237,7 +237,9 @@ class Session:
             **_BASE_GUARDS,
             "wavekit": wavekit,
             "Pattern": wavekit.Pattern,
+            "Channel": wavekit.Channel,
             "VcdReader": wavekit.VcdReader,
+            "FstReader": wavekit.FstReader,
             "FsdbReader": wavekit.FsdbReader,
             "Viewer": Viewer,
         }
