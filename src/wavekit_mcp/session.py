@@ -233,6 +233,15 @@ class Session:
         import wavekit
         from .viewer import Viewer
 
+        # Build guarded __builtins__ BEFORE constructing ns so the namespace
+        # gets the restricted version from the start. Otherwise ns would hold
+        # the old (import-less) dict, and CPython falls back to the real
+        # builtins.__import__ on the first exec — bypassing the whitelist.
+        allowed_imports = self.config.sandbox.allowed_imports
+        guarded_builtins = dict(_ALLOWED_BUILTINS)
+        guarded_builtins["__import__"] = _make_guarded_import(allowed_imports)
+        _BASE_GUARDS["__builtins__"] = guarded_builtins
+
         ns: dict[str, Any] = {
             **_BASE_GUARDS,
             "wavekit": wavekit,
@@ -246,12 +255,6 @@ class Session:
 
         if self.config.file_access.read_enabled or self.config.file_access.write_enabled:
             ns["open"] = self._make_safe_open()
-
-        # Add guarded import to _BASE_GUARDS so _exec() restore picks it up automatically.
-        # Must copy __builtins__ first — _ALLOWED_BUILTINS is a module-level shared dict.
-        allowed_imports = self.config.sandbox.allowed_imports
-        _BASE_GUARDS["__builtins__"] = dict(_ALLOWED_BUILTINS)
-        _BASE_GUARDS["__builtins__"]["__import__"] = _make_guarded_import(allowed_imports)
 
         self.namespace = ns
 

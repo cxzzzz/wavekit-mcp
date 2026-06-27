@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "wavekit-mcp"
-version = "0.4.0"
+version = "0.4.1"
 description = "MCP server for AI-driven waveform analysis via wavekit"
 authors = ["cxzzzz <cxz19961010@outlook.com>"]
 readme = "README.md"

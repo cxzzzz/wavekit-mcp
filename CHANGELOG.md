@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.4.1 - 2026-06-28
+
+### Fixed
+- Fix sandbox import whitelist bypass: the first `run` call in a session used the unrestricted real `builtins.__import__` instead of the guarded one, allowing arbitrary module imports (e.g. `import os`) on the first execution round. The guarded `__builtins__` is now built before the namespace is constructed.
+
+### Security
+- Close an import-whitelist bypass where the first exec round in a newly opened session was not subject to `sandbox.allowed_imports` restrictions.
+
 ## v0.4.0 - 2026-05-23
 
 ### Added
