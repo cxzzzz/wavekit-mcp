@@ -30,6 +30,8 @@ def ensure_config_exists() -> None:
 max_sessions = 5
 run_timeout_sec = 120
 output_max_chars = 500
+result_str_max = 500
+history_max = 500
 
 [file_access]
 read_enabled = false
@@ -48,7 +50,7 @@ port = 8080
 # plots_dir = ""  # empty = auto-create temp directory
 
 [sandbox]
-# Glob patterns for modules that can be imported beyond the built-in allowlist.
+# Glob patterns for modules that can be imported beyond the default allowlist.
 # Examples:
 #   allowed_imports = ["plotly", "matplotlib.*"]  # allow plotly and all matplotlib submodules
 #   allowed_imports = ["*"]  # allow all imports (disable import restrictions)
@@ -66,8 +68,6 @@ class LimitsConfig:
     run_timeout_sec: int = 120
     output_max_chars: int = 500
     result_str_max: int = 500
-    result_list_max: int = 50
-    result_preview_items: int = 30
     history_max: int = 500
 
 
@@ -93,12 +93,14 @@ class ServerConfig:
     plots_dir: str = ""             # empty = auto-create at startup
 
 
+CORE_ALLOWED_IMPORTS = ("wavekit", "wavekit.*", "numpy", "numpy.*")
+
+
 @dataclass
 class SandboxConfig:
-    """Configure RestrictedPython sandbox restrictions."""
-    # Glob patterns for modules that can be imported (e.g., ["plotly.*", "matplotlib.*"])
-    # Default allows wavekit (for MatchStatus, Waveform types) and numpy.
-    allowed_imports: list[str] = field(default_factory=lambda: ["wavekit", "wavekit.*", "numpy", "numpy.*"])
+    """Configure extra RestrictedPython import allowlist entries."""
+    # Extra glob patterns. CORE_ALLOWED_IMPORTS is always allowed for compatibility.
+    allowed_imports: list[str] = field(default_factory=list)
 
 
 @dataclass

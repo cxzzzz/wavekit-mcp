@@ -3,6 +3,7 @@
 import pytest
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 
 @pytest.fixture
@@ -41,15 +42,10 @@ $var wire 8 b 01010101 $end
 def sample_waveform_data():
     """Create sample waveform data for testing using real wavekit.Waveform."""
     import numpy as np
-    from wavekit import Waveform, Signal
+    from wavekit import Waveform
 
     def create_waveform(full_name, values, times):
-        signal = Signal(
-            name=full_name.split('.')[-1],
-            full_name=full_name,
-            width=max(1, max(values).bit_length()),
-            range=None,
-        )
+        signal = SimpleNamespace(name=full_name.split('.')[-1], full_name=full_name)
         return Waveform(
             signal=signal,
             value=np.array(values),

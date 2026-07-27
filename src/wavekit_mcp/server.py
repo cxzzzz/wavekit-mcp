@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import logging
 import pydoc as _pydoc
 from importlib.metadata import version, PackageNotFoundError
@@ -41,12 +42,7 @@ def open_session(description: str | None = None) -> str:
     Returns a session_id used by all other tools.
 
     Pre-injected objects:
-      wavekit            — wavekit module (use wavekit.MatchStatus, wavekit.Waveform, etc.)
-      Pattern            — wavekit.Pattern (temporal pattern matching)
-      Channel            — wavekit.Channel (FIFO routing for pattern waits)
-      VcdReader(path)    — open a VCD file
-      FstReader(path)    — open an FST file
-      FsdbReader(path)   — open an FSDB file
+      wavekit            — wavekit module (wavekit.VcdReader, wavekit.Waveform, etc.)
       Viewer             — waveform visualization (call Viewer() to create instance)
 
     Available via default allowed_imports:
@@ -54,7 +50,7 @@ def open_session(description: str | None = None) -> str:
 
     Typical workflow:
       1. sid = open_session()
-      2. run(sid, "r = VcdReader('/data/sim.vcd')")
+      2. run(sid, "import wavekit\nr = wavekit.VcdReader('/data/sim.vcd')")
       3. run(sid, "data = r.load_waveform('tb.data[7:0]', clock='tb.clk')")
       4. run(sid, "print(len(data.value))")
       5. close_session(sid)
@@ -93,13 +89,14 @@ def list_sessions() -> list[dict]:
 def run(session_id: str, code: str) -> dict[str, Any]:
     """Execute Python code in a persistent session. State persists across calls.
 
-    PRE-INJECTED: VcdReader(path), FstReader(path), FsdbReader(path), Pattern, Channel, Viewer, wavekit
+    PRE-INJECTED: wavekit, Viewer. Import numpy and wavekit.pattern symbols as needed.
     UNFAMILIAR WITH THE API? Call get_api_docs(topic='Waveform') first.
 
     OPEN FILES:
-        r = VcdReader("/path/to/sim.vcd")      # open VCD file
-        r = FstReader("/path/to/sim.fst")      # open FST file
-        r = FsdbReader("/path/to/sim.fsdb")    # open FSDB file
+        import wavekit
+        r = wavekit.VcdReader("/path/to/sim.vcd")      # open VCD file
+        r = wavekit.FstReader("/path/to/sim.fst")      # open FST file
+        r = wavekit.FsdbReader("/path/to/sim.fsdb")    # open FSDB file
 
     WAVEFORM PROCESSING FOR VIEWER DISPLAY:
         # Use Waveform methods to preserve time/clock arrays:
@@ -121,7 +118,8 @@ def run(session_id: str, code: str) -> dict[str, Any]:
 
     MULTI-CALL WORKFLOW:
         # call 1 — load
-        r = VcdReader("sim.vcd")
+        import wavekit
+        r = wavekit.VcdReader("sim.vcd")
         data = r.load_waveform("tb.dut.data[7:0]", clock="tb.clk")
         # call 2 — data is still in namespace
         print(f"mean={np.mean(data.value):.2f}  n={len(data.value)}")
@@ -171,27 +169,23 @@ def get_history(session_id: str, last_n: int = 10) -> list[dict]:
 def get_api_docs(topic: str = "") -> str:
     """Get wavekit API documentation.
 
-    Call with no arguments to list all available topics.
-    Call with a topic name for detailed docs:
-
-      topic="Waveform"    — signal operations: filter, slice, bit ops, arithmetic
-      topic="Reader"      — file loading: load_waveform, load_matched_waveforms, eval
-      topic="Pattern"     — temporal pattern matching DSL
-      topic="Channel"     — FIFO routing for pattern wait() steps
-      topic="MatchResult" — pattern match output structure
-      topic="Signal"      — signal metadata dataclass
-      topic="Scope"       — hierarchy tree node
+    Call with no arguments to list topics. Current topics are generated from
+    wavekit's public Reader/Waveform classes and wavekit.pattern exports.
     """
     import wavekit
+    import wavekit.pattern as pattern_api
     from wavekit.readers.base import Reader
 
     topic_map: dict[str, Any] = {
         "Waveform": wavekit.Waveform,
         "Reader": Reader,
-        "Pattern": wavekit.Pattern,
-        "Channel": wavekit.Channel,
-        "MatchResult": wavekit.MatchResult,
-        "MatchStatus": wavekit.MatchStatus,
+        "Pattern": pattern_api,
+        "MatchStatus": pattern_api.MatchStatus,
+        "MatchPoint": pattern_api.MatchPoint,
+        "MatchRecord": pattern_api.MatchRecord,
+        "MatchRecords": pattern_api.MatchRecords,
+        "PatternError": pattern_api.PatternError,
+        "Channel": pattern_api.Channel,
         "Signal": wavekit.Signal,
         "Scope": wavekit.Scope,
         "VcdReader": wavekit.VcdReader,
@@ -204,7 +198,7 @@ def get_api_docs(topic: str = "") -> str:
         lines += [f"  {name}" for name in topic_map]
         lines += [
             "",
-            "Example: get_api_docs(topic='Waveform')",
+            "Example: get_api_docs(topic='Pattern')",
         ]
         return "\n".join(lines)
 
@@ -214,7 +208,51 @@ def get_api_docs(topic: str = "") -> str:
             f"Available: {list(topic_map.keys())}"
         )
 
-    return _pydoc.render_doc(topic_map[topic], renderer=_pydoc.plaintext)
+    return _render_api_docs(topic, topic_map[topic])
+
+
+def _render_api_docs(topic: str, obj: Any) -> str:
+    lines = [f"# {topic}", ""]
+    doc = inspect.getdoc(obj)
+    if doc:
+        lines += [doc, ""]
+
+    exports = getattr(obj, "__all__", None)
+    if exports:
+        lines += ["## Exports", ""]
+        for name in exports:
+            exported = getattr(obj, name, None)
+            lines.append(_signature_line(name, exported))
+        lines.append("")
+
+    if inspect.isclass(obj):
+        members = [
+            (name, member)
+            for name, member in inspect.getmembers(obj)
+            if not name.startswith("_") and callable(member)
+        ]
+        if members:
+            lines += ["## Public methods", ""]
+            for name, member in members:
+                lines.append(_signature_line(name, member))
+            lines.append("")
+
+    # pydoc keeps detailed method docs without us hand-maintaining API text.
+    rendered = _pydoc.render_doc(obj, renderer=_pydoc.plaintext)
+    lines += ["## pydoc", "", rendered[:12000]]
+    if len(rendered) > 12000:
+        lines.append("\n...[truncated]")
+    return "\n".join(lines)
+
+
+def _signature_line(name: str, obj: Any) -> str:
+    try:
+        sig = str(inspect.signature(obj)) if callable(obj) else ""
+    except (TypeError, ValueError):
+        sig = ""
+    doc = inspect.getdoc(obj) or ""
+    summary = doc.splitlines()[0] if doc else ""
+    return f"- `{name}{sig}`" + (f" — {summary}" if summary else "")
 
 
 # ── resources ─────────────────────────────────────────────────────────────────
@@ -229,320 +267,193 @@ def wavekit_guide() -> str:
     return """\
 # wavekit Analysis Guide
 
-## Session Workflow
+## Session workflow
 
-Always follow this structure:
-  1. open_session() → sid
-  2. run(sid, ...) — one or more calls, state persists between them
-  3. close_session(sid) when done
+1. `open_session()` returns a `session_id`.
+2. `run(session_id, code)` executes Python; state persists between calls.
+3. Keep sessions open while a `Viewer` is visible; closing the session closes it.
 
-**IMPORTANT**: If you use the viewer, keep the session open until the user
-confirms they are done viewing. Closing the session will close the viewer.
-
----
-
-## Opening Files
+Pre-injected names are intentionally small: `wavekit` and `Viewer` only.
+Import everything else explicitly:
 
 ```python
-# Single file — use VcdReader, FstReader, or FsdbReader directly (all are pre-injected)
-r = VcdReader("/path/to/sim.vcd")
-r = FstReader("/path/to/sim.fst")
-r = FsdbReader("/path/to/sim.fsdb")
-
-# Multiple files (e.g. golden vs actual comparison)
-r_gold = VcdReader("/data/golden.vcd")
-r_act  = VcdReader("/data/actual.vcd")
+import numpy as np
+import wavekit
+from wavekit.pattern import Pattern, match, collect, Channel, MatchStatus
 ```
 
-Do NOT use `import wavekit` or `with VcdReader(...)` — just assign directly.
-
 ---
 
-## Waveform Viewer
-
-The `Viewer` class is pre-injected. Create an instance to start a Surfer viewer:
+## Open waveform files
 
 ```python
-# Load waveform data
-wf = r.load_waveform("top.clk", clock="top.clk")
-
-# Create viewer and add waveform
-viewer = Viewer()
-viewer.waveforms.append(wf)
-viewer.push_state()
-
-# Print URL for user to view in browser
-print(f"View at: {viewer.url}")
-
-# Close when done (or session close will clean up)
-viewer.close()
+r = wavekit.VcdReader("/path/to/sim.vcd")
+r = wavekit.FstReader("/path/to/sim.fst")
+r = wavekit.FsdbReader("/path/to/sim.fsdb")
 ```
 
-**IMPORTANT**: The viewer runs inside the session. Closing the session
-will close the viewer. Keep the session open until the user confirms
-they are done viewing waveforms.
+Do not use `with wavekit.VcdReader(...)` inside a persistent MCP session unless
+you intend to close the reader at the end of that same `run()` call.
 
 ---
 
-## Loading Waveforms
+## Load waveforms
 
 ```python
-# Single signal — sampled on negedge of clock by default
-data = r.load_waveform("tb.dut.data[7:0]", clock="tb.clk")
+clk = "tb.clk"
+data = r.load_waveform("tb.dut.data[7:0]", clock=clk)
 
-# Access the three arrays
-data.value   # np.ndarray of signal values (uint64 or int64)
-data.clock   # np.ndarray of absolute clock cycle numbers
-data.time    # np.ndarray of simulation timestamps
-
-# Batch load — returns dict[tuple, Waveform]; key is tuple of captured values
-waves = r.load_matched_waveforms("tb.dut.fifo_{0..3}.w_ptr[2:0]", clock_pattern="tb.clk")
-for (idx,), wave in waves.items():
-    print(f"fifo_{idx}: mean={np.mean(wave.value):.2f}")
-
-# Computed expression — arithmetic on signal paths
-occupancy = r.eval("tb.dut.w_ptr[3:0] - tb.dut.r_ptr[3:0]", clock="tb.clk")
+# Aligned numpy arrays
+data.value   # sampled values
+data.clock   # absolute clock cycles
+data.time    # simulation timestamps
 ```
 
-### Signal path pattern syntax
+Useful options: `signed=True`, `xz_value=0`, `sample_on_posedge=True`,
+`begin_time=...`, `end_time=...`, `begin_cycle=...`, `end_cycle=...`.
 
-| Syntax | Description | Example |
-|--------|-------------|---------|
-| `tb.dut.sig[7:0]` | Literal dotted path + bit range | `"tb.dut.data[7:0]"` |
-| `{a,b,c}` | String alternatives → one key element each | `"tb.dut.J_{state,next}[3:0]"` |
-| `{start..end}` | Integer range | `"tb.lane_{0..3}.valid"` |
-| `{start..end..step}` | Integer range with step | `"tb.lane_{0..6..2}.valid"` |
-| Multiple `{}` | Cartesian product of all expansions | `"tb.u{0,1}.fifo_{a,b}.cnt"` |
-| `@<regex>` | Python `re.fullmatch()`; `(...)` groups captured | `r"tb.dut.@(req|ack|valid)"` |
-| `$$ModName` | Any-depth scope by module def name (FSDB only) | `"$$axi_slave.rdata[31:0]"` |
-| `$ModName` | Direct-child scope by module def name (FSDB only) | `"tb.dut.$pipe_stage"` |
+Unknown/X/Z mask loading is available when source unknown bits matter:
+
+```python
+value = r.load_waveform("tb.bus[7:0]", clock=clk, xz_value=0)
+unknown = r.load_unknown_mask("tb.bus[7:0]", clock=clk)
+known_value = value.mask(unknown == 0)
+```
 
 ---
 
-## Common Analysis Patterns
+## Matched loading and query syntax
 
-### Basic statistics
+Use `signal_path` / `clock_path` terminology for matched loads:
+
 ```python
-data = r.load_waveform("tb.dut.out[7:0]", clock="tb.clk")
-print(f"min={np.min(data.value)}  max={np.max(data.value)}  mean={np.mean(data.value):.2f}")
+waves = r.load_matched_waveforms(
+    signal_path="tb.dut.fifo_{0..3}.w_ptr[2:0]",
+    clock_path="tb.clk",
+)
+for key, wave in waves.items():
+    print(key, np.mean(wave.value))
+```
+
+Matched APIs return `dict[CaptureKey, ...]`. A `CaptureKey` is a tuple of typed
+capture objects such as `BraceCapture`, `RegexCapture`, or `WildcardCapture`.
+Use `str(key)` for reporting unless you need capture internals.
+
+Query syntax:
+
+| Syntax | Example | Meaning |
+|--------|---------|---------|
+| plain | `tb.dut.valid` | exact path |
+| brace | `fifo_{0..3}.ptr` | alternatives/ranges |
+| `/regex/` | `tb./lane_(\\d+)/.valid` | canonical regex |
+| `@regex` | `tb.@(req|ack)` | legacy regex spelling |
+| `*` / `**` | `tb.*.valid`, `tb.**.valid` | one-level / recursive wildcard |
+| `$` / `$$` | `tb.$fifo.data`, `tb.$$fifo.data` | FSDB module-definition match |
+
+Explore hierarchy with `r.top_scopes`, `r.get_matched_signals(path)`, and
+`r.get_matched_scopes(path)`.
+
+---
+
+## Waveform operations
+
+Use Waveform methods when you need to preserve time/clock arrays, especially for
+Viewer display:
+
+```python
+active = data.mask(valid == 1)
+window = data.cycle_slice(100, 500)
+changes = state.compress()
+small = data.downsample(500, np.mean)
+```
+
+Use numpy on `.value` for scalar statistics:
+
+```python
+print(np.mean(active.value))
 print(np.histogram(data.value, bins=8))
 ```
 
-### Filter to interesting cycles
-```python
-valid = r.load_waveform("tb.dut.valid", clock="tb.clk")
-data  = r.load_waveform("tb.dut.data[7:0]", clock="tb.clk")
-
-# Keep only cycles where valid=1
-active = data.mask(valid == 1)
-print(f"active cycles: {len(active.value)}  mean: {np.mean(active.value):.2f}")
-```
-
-### Detect transitions
-```python
-state = r.load_waveform("tb.dut.state[2:0]", clock="tb.clk")
-changes = state.compress()   # one entry per distinct value run
-print(f"state transitions: {len(changes.value) - 1}")
-print(f"unique states: {np.unique(changes.value)}")
-```
-
-### Time-window analysis
-```python
-# By simulation time
-window = data.time_slice(begin=1000, end=5000)
-
-# By clock cycle
-window = data.cycle_slice(begin=100, end=500)
-```
-
-### Compare two simulations
-```python
-r1 = VcdReader("/data/golden.vcd")
-r2 = VcdReader("/data/actual.vcd")
-gold = r1.load_waveform("tb.data[7:0]", clock="tb.clk")
-act  = r2.load_waveform("tb.data[7:0]", clock="tb.clk")
-
-match = (gold == act)
-mismatch_cycles = match.mask(match == 0)
-print(f"mismatches: {len(mismatch_cycles.value)}")
-if len(mismatch_cycles.value) > 0:
-    print(f"first mismatch at clock cycle: {mismatch_cycles.clock[0]}")
-```
+Avoid printing full arrays; return counts, previews, histograms, or first failing
+cycle.
 
 ---
 
-## Temporal Pattern Matching
+## Declarative temporal matching
 
-Use `Pattern` to find transaction sequences (handshakes, latencies, bursts).
+`Pattern` objects describe transaction shapes. Execute them with module-level
+`match(...)`; timeout is also an argument to `match(...)`.
 
-### AXI read latency
 ```python
-arvalid = r.load_waveform("tb.arvalid",     clock="tb.clk")
-arready = r.load_waveform("tb.arready",     clock="tb.clk")
-rvalid  = r.load_waveform("tb.rvalid",      clock="tb.clk")
-rready  = r.load_waveform("tb.rready",      clock="tb.clk")
-rdata   = r.load_waveform("tb.rdata[31:0]", clock="tb.clk")
+from wavekit.pattern import Pattern, match, MatchStatus
 
-result = (
+ar_fire = arvalid & arready
+r_fire = rvalid & rready
+
+records = match(
     Pattern()
-    .wait(arvalid & arready)   # start: AR handshake
-    .wait(rvalid  & rready)    # end:   R handshake
-    .capture("data", rdata)
-    .timeout(256)
-    .match()
+    .wait(ar_fire)
+    .wait(r_fire)
+    .capture("rdata", rdata),
+    timeout=256,
 )
 
-valid = result.filter_valid()
-print(f"transactions : {len(valid.duration.value)}")
-print(f"latency mean : {np.mean(valid.duration.value):.1f} cycles")
-print(f"latency max  : {np.max(valid.duration.value)} cycles")
-print(f"captured data preview: {valid.captures['data'].value[:8]}")
+ok = records.filter_ok()
+failed = records.filter_failed()
+print(f"ok={len(ok)} failed={len(failed)}")
+print(f"latency cycles: {(ok.end.clock - ok.start.clock)[:8]}")
+print(ok.captures["rdata"].value[:8])
 ```
 
-### AXI write burst (variable-length)
+Status values are objects. Use status classes, not enum constants:
+
 ```python
-awvalid = r.load_waveform("tb.awvalid", clock="tb.clk")
-awready = r.load_waveform("tb.awready", clock="tb.clk")
-wvalid  = r.load_waveform("tb.wvalid",  clock="tb.clk")
-wready  = r.load_waveform("tb.wready",  clock="tb.clk")
-wlast   = r.load_waveform("tb.wlast",   clock="tb.clk")
-wdata   = r.load_waveform("tb.wdata[31:0]", clock="tb.clk")
-
-beat = Pattern().wait(wvalid & wready).capture("beats", wdata, mode="list")
-
-result = (
-    Pattern()
-    .wait(awvalid & awready)     # AW handshake
-    .loop(beat, until=wlast)     # collect beats until wlast
-    .timeout(512)
-    .match()
-)
-
-valid = result.filter_valid()
-for i, beats in enumerate(valid.captures["beats"].value[:5]):
-    print(f"burst {i}: {len(beats)} beats, data={beats}")
+timeouts = records.filter_status(MatchStatus.Timeout)
+require_failures = records.filter_status(MatchStatus.RequireViolated)
 ```
 
-### Handshake with require (enable must stay high)
-```python
-result = (
-    Pattern()
-    .wait(req, require=enable)   # wait for req; fail if enable drops
-    .wait(ack)
-    .timeout(64)
-    .match()
-)
+`wait(...)` observes an event. `consume(..., channel=...)` claims an event so
+other matches cannot reuse it. Successful blocking steps continue in the same
+cycle; add `.delay(1)` when next-cycle behavior is required.
 
-ok = result.filter_valid()
-violated = result.status.mask(result.status == wavekit.MatchStatus.REQUIRE_VIOLATED)
-print(f"ok={len(ok.duration.value)}  require_violations={len(violated.value)}")
+---
+
+## Programmable temporal extraction
+
+Use `collect(body)` when transaction shape depends on values or branches.
+
+```python
+from wavekit.pattern import collect
+
+cmd_fire = cmd_valid & cmd_ready
+rsp_fire = rsp_valid & rsp_ready
+
+
+def read_cmd(ctx):
+    if not ctx.value(cmd_fire):
+        return None
+    addr = int(ctx.value(cmd_addr))
+    ctx.consume(rsp_fire, channel="rsp")
+    return {"addr": addr, "status": int(ctx.value(rsp_status))}
+
+commands = collect(read_cmd, timeout=128)
+print(f"commands={len(commands)}")
 ```
 
 ---
 
-## Working with Large Waveforms
-
-Output and result previews are limited. Reduce data before inspecting:
+## Viewer
 
 ```python
-# Remove consecutive duplicates (good for state/control signals)
-data.compress()
-
-# Aggregate to N points (good for data/bus signals)
-data.downsample(500, np.mean)
-
-# Zoom into a region of interest
-data.cycle_slice(1000, 2000)
-
-# Print scalars, not arrays
-print(np.mean(data.value))          # ✓
-print(data.value.tolist())          # ✗ truncated
+viewer = Viewer()
+viewer.waveforms.append(data)
+viewer.markers.append(time=int(data.time[0]), name="start")
+viewer.zoom_to_fit()
+viewer.push_state()
+print(viewer.url)
 ```
 
----
-
-## Reading Log Files (if file access is enabled)
-
-```python
-with open("/data/sim/run.log") as f:
-    log = f.read()
-
-# Parse relevant lines
-lines = [l for l in log.splitlines() if "ERROR" in l]
-print(f"error lines: {len(lines)}")
-for l in lines[:5]:
-    print(l)
-```
-
----
-
-## Finding Signals by Module Name (FSDB only)
-
-When analysing FSDB files you often know the *module type* but not the full
-instance path. Use `$` / `$$` prefixes to search by module name:
-
-```
-$ModName    — direct-child scope whose module definition name is ModName
-$$ModName   — any-depth descendant scope with that module name
-```
-
-This is the fastest way to locate signals when you only know the RTL module name.
-
-### Get all instances of a module
-
-```python
-r = FsdbReader("/data/sim.fsdb")
-
-# Find every instance of module "axi_slave" anywhere in the hierarchy
-scopes = r.get_matched_scopes("$$axi_slave")
-for key, scope in scopes.items():
-    print(scope.full_name())   # prints the full instance path
-```
-
-### Load a signal from all instances of a module
-
-```python
-# Load "data_out[7:0]" from every instance of "fifo_unit" in the design
-waves = r.load_matched_waveforms(
-    "$$fifo_unit.data_out[7:0]",
-    clock_pattern="tb.clk",
-)
-for key, wave in waves.items():
-    print(f"instance key={key}  mean={np.mean(wave.value):.2f}")
-```
-
-### Narrow to direct children only
-
-```python
-# Only instances of "pipe_stage" that are direct children of "tb.dut"
-scopes = r.get_matched_scopes("tb.dut.$pipe_stage")
-```
-
-### Combine with brace/regex patterns
-
-```python
-# All instances of either "fifo_a" or "fifo_b" anywhere in hierarchy
-waves = r.load_matched_waveforms(
-    "$$fifo_{a,b}.w_ptr[3:0]",
-    clock_pattern="tb.clk",
-)
-```
-
-> **Note:** `$` / `$$` rely on the module *definition* name stored in the FSDB
-> (the `def_name` attribute). They are not available for VCD files, which do
-> not record module type information.
-
----
-
-## Tips
-
-- **Signal path**: use full dotted path e.g. `"tb.dut.sub.signal[7:0]"`. If unsure,
-  call `r.top_scope_list()` to traverse the hierarchy, or use `r.get_matched_signals("tb.@(.*)")`.
-- **Signed values**: pass `signed=True` to `load_waveform()` for two's-complement signals.
-- **X/Z values**: defaulted to 0; override with `xz_value=` parameter.
-- **Clock edge**: default is negedge (stable value capture); use `sample_on_posedge=True` if needed.
-- **Pattern result keys**: `captures["name"]` is a Waveform; for list captures (`mode="list"`),
-  each element of `.value` is a Python list of beat values.
+Keep the session open while the user is viewing.
 """
 
 

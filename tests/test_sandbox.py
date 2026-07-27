@@ -65,6 +65,17 @@ class TestImportWhitelist:
         r = session.execute("import wavekit.readers")
         assert r.error is None, f"wavekit.readers should be allowed: {r.error}"
 
+    def test_wavekit_pattern_import_allowed(self, session):
+        """wavekit 0.7 pattern APIs are imported explicitly from wavekit.pattern."""
+        r = session.execute("from wavekit.pattern import Pattern, match")
+        assert r.error is None, f"wavekit.pattern import should be allowed: {r.error}"
+
+    def test_old_pattern_alias_not_preinjected(self, session):
+        """Session namespace only pre-injects wavekit and Viewer, not old aliases."""
+        r = session.execute("Pattern")
+        assert r.error is not None
+        assert "NameError" in r.error
+
     def test_disallowed_submodule_blocked(self, session):
         """A submodule of a non-whitelisted package must be blocked."""
         r = session.execute("import os.path")
@@ -102,3 +113,27 @@ class TestFileAccess:
         r = session.execute("open('/etc/passwd')")
         assert r.error is not None
         assert "NameError" in r.error
+
+
+class TestConfigMergesCoreImports:
+    def test_custom_allowlist_still_keeps_wavekit_and_numpy(self):
+        cfg = Config()
+        cfg.sandbox.allowed_imports = ["plotly.*"]
+        session = Session("custom", cfg)
+        try:
+            assert session.execute("import numpy as np").error is None
+            assert session.execute("from wavekit.pattern import Pattern, match").error is None
+        finally:
+            session.close()
+
+    def test_config_allowlist_is_extra_not_replacement(self, tmp_path):
+        config = tmp_path / "settings.toml"
+        config.write_text('[sandbox]\nallowed_imports = ["plotly.*"]\n')
+        cfg = Config.load(str(config))
+
+        assert cfg.sandbox.allowed_imports == ["plotly.*"]
+        session = Session("loaded-custom", cfg)
+        try:
+            assert session.execute("import numpy as np").error is None
+        finally:
+            session.close()

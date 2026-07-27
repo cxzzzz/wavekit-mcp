@@ -11,8 +11,6 @@ max_sessions         = 5      # max concurrent sessions
 run_timeout_sec      = 120    # seconds before a run() call is killed
 output_max_chars     = 500    # stdout/stderr truncation limit per run()
 result_str_max       = 500    # string result truncation limit
-result_list_max      = 50     # list/dict truncation limit
-result_preview_items = 30     # array / Waveform preview length
 history_max          = 500    # max history entries kept per session
 
 [file_access]
@@ -32,7 +30,7 @@ level = "INFO"       # DEBUG / INFO / WARNING / ERROR
 
 [sandbox]
 # Glob patterns for modules that can be imported beyond the built-in allowlist.
-# The default built-in allowlist includes: numpy, standard library modules, etc.
+# The default allowlist includes: wavekit, wavekit.*, numpy, numpy.*.
 # Use this to allow additional packages like plotting libraries.
 # allowed_imports = []
 # Examples:
