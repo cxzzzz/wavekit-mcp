@@ -13,7 +13,7 @@
 - 时序模式匹配
 - 统计计算、异常检测、事件提取
 
-AI 拿到的是分析结果——一个均值、一次时序违例、一段过滤后的数据——而不是原始波形。输出限制迫使 AI 用"信号语义"思考，而非在数值序列中迷失。
+AI 拿到的是分析结果——一个均值、一次时序违例、一段过滤后的数据——而不是原始波形。额外的输出限制迫使 AI 用"信号语义"思考，而非被无效的数值噪声填满上下文。
 
 ## 安装
 
@@ -24,11 +24,11 @@ pip install wavekit-mcp
 启动：
 
 ```bash
-wavekit-mcp                              # 默认配置
-wavekit-mcp --config wavekit_mcp.toml   # 指定配置
+wavekit-mcp
+wavekit-mcp --config /path/to/wavekit_mcp.toml
 ```
 
-配置 MCP 客户端（以 Claude Desktop 为例）：
+MCP 客户端示例：
 
 ```json
 {
@@ -41,16 +41,15 @@ wavekit-mcp --config wavekit_mcp.toml   # 指定配置
 }
 ```
 
-## 配置项
+## 配置
 
-复制 `wavekit_mcp.toml.example` 按需修改：
+复制 `wavekit_mcp.toml.example` 后按需修改。所有字段都是可选的。
 
 ```toml
 [limits]
 max_sessions         = 5
 run_timeout_sec      = 120
 output_max_chars     = 500
-result_preview_items = 30
 
 [file_access]
 read_enabled         = false
@@ -59,88 +58,185 @@ read_allowed_paths   = ["/tmp/**"]
 write_allowed_paths  = ["/tmp/**"]
 
 [log]
-file  = "/var/log/wavekit_mcp.log"   # 留空只输出到 stderr
+file  = ""
 level = "INFO"
+
+[sandbox]
+# 默认已经允许 wavekit、wavekit.*、numpy、numpy.*
+# allowed_imports = ["plotly", "matplotlib.*"]
 ```
 
-环境变量覆盖：
+标量字段也可以用环境变量覆盖：
 
 ```bash
 WAVEKIT_MCP_RUN_TIMEOUT_SEC=300 wavekit-mcp
 ```
 
-## 工具列表
+## 工具
 
 | 工具 | 说明 |
 |------|------|
-| `open_session(description?)` | 创建会话 |
-| `close_session(sid)` | 关闭会话 |
-| `list_sessions()` | 列出所有会话 |
-| `run(sid, code)` | 执行 Python 代码 |
-| `get_history(sid, n)` | 查看执行历史 |
-| `get_api_docs(topic)` | 查看 wavekit API 文档 |
+| `open_session(description?)` | 创建持久 Python 会话。 |
+| `close_session(session_id)` | 关闭会话并释放 worker 资源。 |
+| `list_sessions()` | 列出当前会话。 |
+| `run(session_id, code)` | 执行 Python，返回 `{result, output, error, duration_ms}`。 |
+| `get_history(session_id, last_n)` | 返回最近的执行记录。 |
+| `get_api_docs(topic)` | 查看 wavekit 的 Reader / Waveform / pattern 文档。 |
 
-每个会话预置：`wavekit`、`Pattern`、`Channel`、`VcdReader`、`FstReader`、`FsdbReader`、`Viewer`
+每个会话只预置：
 
-其他类型通过 `wavekit.MatchStatus`、`wavekit.Waveform` 等访问。
+- `wavekit` —— 直接访问 `wavekit.VcdReader`、`wavekit.Waveform` 等。
+- `Viewer` —— 可选波形可视化。
 
-`numpy` 可通过默认 allowed_imports 导入：`import numpy as np`
-
-## 示例
-
-### 基本用法
+其余符号请显式导入：
 
 ```python
-# call 1
-r = VcdReader("/data/sim.vcd")
+import numpy as np
+import wavekit
+from wavekit.pattern import Pattern, match, collect, Channel, MatchStatus
+```
+
+`run()` 以接近 REPL 的形式返回最后一个表达式：结果显示为截断后的 `repr(...)` 文本；真实对象仍保留在会话命名空间里。
+
+## 基本用法
+
+```python
+import numpy as np
+import wavekit
+
+r = wavekit.VcdReader("/data/sim.vcd")
 data = r.load_waveform("tb.dut.data[7:0]", clock="tb.clk")
 
-# call 2 — state persists
-print(f"samples={len(data.value)}")
+print(f"samples={len(data.value)} mean={np.mean(data.value):.2f}")
 ```
 
-### AXI 读延迟分析
+## Reader 示例
+
+### 批量匹配加载
 
 ```python
-arvalid = r.load_waveform("tb.arvalid", clock="tb.clk")
-arready = r.load_waveform("tb.arready", clock="tb.clk")
-rvalid  = r.load_waveform("tb.rvalid",  clock="tb.clk")
-rready  = r.load_waveform("tb.rready",  clock="tb.clk")
+waves = r.load_matched_waveforms(
+    signal_path="tb.dut.fifo_{0..3}.w_ptr[2:0]",
+    clock_path="tb.clk",
+)
+for key, wave in waves.items():
+    print(f"{key}: mean={np.mean(wave.value):.2f}")
+```
 
-result = (
-    Pattern()
-    .wait(arvalid & arready)
-    .wait(rvalid  & rready)
-    .timeout(256)
-    .match()
+匹配 API 返回 `dict[CaptureKey, ...]`。`CaptureKey` 是由 `BraceCapture`、`RegexCapture`、`WildcardCapture` 等 typed capture 组成的 tuple。
+
+### X/Z 掩码
+
+```python
+value = r.load_waveform("tb.bus[7:0]", clock="tb.clk", xz_value=0)
+unknown = r.load_unknown_mask("tb.bus[7:0]", clock="tb.clk")
+known_value = value.mask(unknown == 0)
+
+unknowns = r.load_matched_unknown_masks(
+    signal_path="tb.dut.fifo_{0..3}.data[7:0]",
+    clock_path="tb.clk",
+)
+```
+
+### 表达式
+
+```python
+occupancy = r.eval(
+    "tb.dut.w_ptr[3:0] - tb.dut.r_ptr[3:0]",
+    clock="tb.clk",
 )
 
-valid = result.filter_valid()
-print(f"transactions={len(valid.duration.value)}  mean={np.mean(valid.duration.value):.1f} cycles")
+occupancies = r.eval(
+    "tb.fifo_{0..3}.w_ptr[2:0] - tb.fifo_{0..3}.r_ptr[2:0]",
+    clock="tb.clk",
+    mode="zip",
+)
 ```
 
-## 安全限制
+### 查询语法
 
-代码运行在 [RestrictedPython](https://restrictedpython.readthedocs.io/) 环境下：
-- `import` 默认被禁用
-- `__class__`、`__bases__` 等属性访问被禁用
-- 文件 I/O 默认关闭
+| 语法 | 示例 | 含义 |
+|------|------|------|
+| 普通路径 | `tb.dut.valid` | 精确信号/层级路径 |
+| 花括号 | `fifo_{0..3}.ptr` | 枚举或整数范围 |
+| `/regex/` | `tb./lane_(\d+)/.valid` | 正则匹配 + 捕获 |
+| `@regex` | `tb.@(req|ack)` | 兼容旧写法 |
+| `*` / `**` | `tb.*.valid`, `tb.**.valid` | 单层 / 递归通配 |
+| `$` / `$$` | `tb.$fifo.data`, `tb.$$fifo.data` | FSDB 按 module definition 名称匹配 |
 
-> 注意：设计目的是防止误操作，不能完全隔离恶意代码。
+用 `r.top_scopes`、`r.get_matched_signals(path)`、`r.get_matched_scopes(path)` 来探索层级。
 
-### 放宽限制
+## Pattern 匹配
 
-如需允许特定导入，在配置中添加：
+`Pattern` 用来描述时序事务。通过模块级 `match(...)` 执行。
 
-```toml
-[sandbox]
-allowed_imports = ["plotly.*", "matplotlib.*"]  # glob 模式匹配
-# allowed_imports = ["*"]  # 允许所有导入
+```python
+from wavekit.pattern import Pattern, match, MatchStatus
+
+ar_fire = arvalid & arready
+r_fire = rvalid & rready
+
+records = match(
+    Pattern()
+    .wait(ar_fire)
+    .wait(r_fire)
+    .capture("rdata", rdata),
+    timeout=256,
+)
+
+ok = records.filter_ok()
+print(f"transactions={len(ok)}")
+print(f"latencies={ok.end.clock - ok.start.clock}")
+print(ok.captures["rdata"].value[:8])
+
+timeouts = records.filter_status(MatchStatus.Timeout)
+require_failures = records.filter_status(MatchStatus.RequireViolated)
 ```
 
-## AI 助手 Skill
+需要独占占用事件时用 `consume(..., channel=...)`。成功的 blocking step 会留在同一个 cycle；如果要下一拍行为，用 `.delay(1)`。
 
-本仓库包含一个用于 wavekit-mcp 的 Claude/OpenCode skill：
+如果事务形状依赖数据值或分支，改用 `collect(...)`：
 
-- [skills/wavekit-usage/SKILL.md](./skills/wavekit-usage/SKILL.md) — 可安装的 skill 入口
-- [skills/wavekit-usage/references/cheatsheet.md](./skills/wavekit-usage/references/cheatsheet.md) — 常用模式速查
+```python
+from wavekit.pattern import collect
+
+cmd_fire = cmd_valid & cmd_ready
+rsp_fire = rsp_valid & rsp_ready
+
+
+def read_cmd(ctx):
+    if not ctx.value(cmd_fire):
+        return None
+    addr = int(ctx.value(cmd_addr))
+    ctx.consume(rsp_fire, channel="rsp")
+    return {"addr": addr, "status": int(ctx.value(rsp_status))}
+
+commands = collect(read_cmd, timeout=128)
+print(f"commands={len(commands)}")
+```
+
+## Viewer
+
+```python
+viewer = Viewer()
+viewer.waveforms.append(data)
+viewer.markers.append(time=int(data.time[0]), name="start")
+viewer.zoom_to_fit()
+viewer.push_state()
+print(viewer.url)
+```
+
+保持 session 打开，直到用户看完；关闭 session 会同时关闭 viewer。
+
+## 安全
+
+用户代码在独立 worker 进程里运行，受 RestrictedPython 和 `sandbox.allowed_imports` 限制。文件访问默认关闭，需在 `[file_access]` 中显式开启。
+
+这能防止误操作并隔离崩溃，但不等于完整的恶意代码沙箱。
+
+## AI skill
+
+仓库内包含 wavekit-mcp skill：
+
+- [skills/wavekit-usage/SKILL.md](./skills/wavekit-usage/SKILL.md)
+- [skills/wavekit-usage/references/cheatsheet.md](./skills/wavekit-usage/references/cheatsheet.md)

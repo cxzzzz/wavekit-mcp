@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "wavekit-mcp"
-version = "0.4.1"
+version = "0.5.0"
 description = "MCP server for AI-driven waveform analysis via wavekit"
 authors = ["cxzzzz <cxz19961010@outlook.com>"]
 readme = "README.md"
@@ -10,7 +10,7 @@ repository = "https://github.com/cxzzzz/wavekit-mcp"
 python = ">=3.10,<3.15"
 tomli = ">=2.0"
 fastmcp = ">=2.0"
-wavekit = ">=0.6.1"
+wavekit = ">=0.7.0"
 pyvcd = ">=0.4.0"
 numpy = "*"
 RestrictedPython = ">=7.0"
@@ -27,6 +27,7 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [

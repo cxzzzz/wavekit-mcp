@@ -26,7 +26,7 @@ from RestrictedPython.Guards import (
     safer_getattr,
 )
 
-from .config import Config
+from .config import CORE_ALLOWED_IMPORTS, Config
 from .serializer import serialize_result
 from .worker import worker_main
 
@@ -209,7 +209,7 @@ def _make_guarded_import(allowed_patterns: list[str]):
         raise ImportError(
             f"Import of '{name}' is not allowed. "
             f"Allowed patterns: {allowed_patterns}. "
-            f"Add to sandbox.allowed_imports in config to allow."
+            f"Add extra modules to sandbox.allowed_imports in config to allow."
         )
 
     return guarded_import
@@ -237,7 +237,7 @@ class Session:
         # gets the restricted version from the start. Otherwise ns would hold
         # the old (import-less) dict, and CPython falls back to the real
         # builtins.__import__ on the first exec — bypassing the whitelist.
-        allowed_imports = self.config.sandbox.allowed_imports
+        allowed_imports = list(dict.fromkeys([*CORE_ALLOWED_IMPORTS, *self.config.sandbox.allowed_imports]))
         guarded_builtins = dict(_ALLOWED_BUILTINS)
         guarded_builtins["__import__"] = _make_guarded_import(allowed_imports)
         _BASE_GUARDS["__builtins__"] = guarded_builtins
@@ -245,11 +245,6 @@ class Session:
         ns: dict[str, Any] = {
             **_BASE_GUARDS,
             "wavekit": wavekit,
-            "Pattern": wavekit.Pattern,
-            "Channel": wavekit.Channel,
-            "VcdReader": wavekit.VcdReader,
-            "FstReader": wavekit.FstReader,
-            "FsdbReader": wavekit.FsdbReader,
             "Viewer": Viewer,
         }
 

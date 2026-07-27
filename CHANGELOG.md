@@ -7,6 +7,21 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.5.0 - 2026-07-27
+
+### Changed
+- Require wavekit 0.7.0 or newer.
+- Keep session pre-injection minimal: only `wavekit` and `Viewer` are injected; import readers and `wavekit.pattern` symbols explicitly.
+- Rework `get_api_docs` to render public wavekit Reader/Waveform/pattern docs with introspection instead of hand-maintained topic objects.
+- Rewrite README, Chinese README, MCP guide, and wavekit usage skill for wavekit 0.7.0 APIs.
+
+### Fixed
+- Simplify result serialization to REPL-like truncated `repr(...)` output.
+- Keep `sandbox.allowed_imports` additive so local config extends the default wavekit/numpy imports instead of replacing them.
+
+### Removed
+- Remove documentation for old `Pattern().match()`, `.timeout(...)`, `filter_valid()`, `clock_pattern=`, and top-level pattern symbols.
+
 ## v0.4.1 - 2026-06-28
 
 ### Fixed
